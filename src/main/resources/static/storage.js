@@ -265,7 +265,7 @@ class StorageManager {
     async initDriveFolder() {
         // Find existing DumpYard folder
         const response = await gapi.client.drive.files.list({
-            q: "mimeType='application/vnd.google-apps.folder' and name='DumpYard' and trashed=false",
+            q: "mimeType='application/vnd.google-apps.folder' and name='DevVault' and trashed=false",
             fields: 'files(id, name)',
             spaces: 'drive'
         });
@@ -275,7 +275,7 @@ class StorageManager {
         } else {
             // Create folder
             const folderMetadata = {
-                name: 'DumpYard',
+                name: 'DevVault',
                 mimeType: 'application/vnd.google-apps.folder'
             };
             const folder = await gapi.client.drive.files.create({

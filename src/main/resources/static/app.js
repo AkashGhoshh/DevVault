@@ -71,7 +71,7 @@ async function loadNotes() {
             notes.push({
                 id: generateId(),
                 parentId: null,
-                title: 'Untitled Dump',
+                title: 'Untitled Note',
                 content: '',
                 updatedAt: Date.now(),
                 isExpanded: true
@@ -103,7 +103,7 @@ async function saveNoteContent(id, content) {
     if (firstLine) {
         note.title = firstLine.replace(/^#+\s*/, '').substring(0, 30);
     } else {
-        note.title = 'Untitled Dump';
+        note.title = 'Untitled Note';
     }
     
     await window.storageManager.saveNote(note);
@@ -232,7 +232,7 @@ window.createNewNote = async function(parentId = null) {
     const newNote = {
         id: generateId(),
         parentId: parentId,
-        title: parentId ? 'New Sub-Dump' : 'New Dump',
+        title: parentId ? 'New Sub-Note' : 'New Note',
         content: '',
         updatedAt: Date.now(),
         isExpanded: true
@@ -864,7 +864,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             const previewContainer = document.getElementById('preview-container');
             const opt = {
                 margin:       10,
-                filename:     'dumpyard_export.pdf',
+                filename:     'devvault_export.pdf',
                 image:        { type: 'jpeg', quality: 0.98 },
                 html2canvas:  { scale: 2, useCORS: true, backgroundColor: '#0f172a' },
                 jsPDF:        { unit: 'mm', format: 'a4', orientation: 'portrait' }
