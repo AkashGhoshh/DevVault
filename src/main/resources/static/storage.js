@@ -82,8 +82,17 @@ class StorageManager {
                 return; // Abort changing mode
             }
         } else if (newMode === 'gdrive') {
-            alert('Google Drive Sync requires you to configure the CLIENT_ID in storage.js first.');
-            // Implementation pending OAuth setup
+            if (this.CLIENT_ID.includes('YOUR_GOOGLE_CLIENT_ID_HERE')) {
+                alert('Google Drive Sync requires you to configure the CLIENT_ID in storage.js first.');
+                return;
+            }
+            try {
+                await this.initGoogleAPI();
+            } catch (e) {
+                console.error('Drive setup failed', e);
+                alert('Failed to connect to Google Drive.');
+                return;
+            }
         }
         
         this.mode = newMode;
@@ -117,8 +126,7 @@ class StorageManager {
         } else if (this.mode === 'localfolder') {
             return this.saveToLocalFolder(noteObj);
         } else if (this.mode === 'gdrive') {
-            console.log('Saving to GDrive... (Not fully implemented yet)');
-            return this.saveToLocalStorage(noteObj); // Fallback for now
+            return this.saveToGDrive(noteObj);
         }
     }
     
@@ -128,7 +136,7 @@ class StorageManager {
         } else if (this.mode === 'localfolder') {
             return this.loadFromLocalFolder();
         } else if (this.mode === 'gdrive') {
-            return this.loadFromLocalStorage(); // Fallback for now
+            return this.loadFromGDrive();
         }
     }
     
@@ -139,6 +147,8 @@ class StorageManager {
             localStorage.setItem('dumpyard_notes', JSON.stringify(notes));
         } else if (this.mode === 'localfolder') {
             await this.deleteFromLocalFolder(id);
+        } else if (this.mode === 'gdrive') {
+            await this.deleteFromGDrive(id);
         }
     }
 
@@ -213,9 +223,181 @@ class StorageManager {
         }
     }
     
-    // --- Google Drive Implementation Placeholder ---
+    // --- Google Drive Implementation ---
+    async initGoogleAPI() {
+        if (this.gapiInited && this.gisInited && this.folderId) return;
+        
+        return new Promise((resolve, reject) => {
+            gapi.load('client', async () => {
+                try {
+                    await gapi.client.init({
+                        discoveryDocs: ["https://www.googleapis.com/discovery/v1/apis/drive/v3/rest"],
+                    });
+                    this.gapiInited = true;
+                    
+                    this.tokenClient = google.accounts.oauth2.initTokenClient({
+                        client_id: this.CLIENT_ID,
+                        scope: this.SCOPES,
+                        callback: async (resp) => {
+                            if (resp.error !== undefined) {
+                                reject(resp);
+                            }
+                            this.gisInited = true;
+                            await this.initDriveFolder();
+                            resolve();
+                        },
+                    });
+                    
+                    if (gapi.client.getToken() === null) {
+                        this.tokenClient.requestAccessToken({prompt: 'consent'});
+                    } else {
+                        await this.initDriveFolder();
+                        resolve();
+                    }
+                } catch(e) {
+                    console.error("GAPI Init error", e);
+                    reject(e);
+                }
+            });
+        });
+    }
+
+    async initDriveFolder() {
+        // Find existing DumpYard folder
+        const response = await gapi.client.drive.files.list({
+            q: "mimeType='application/vnd.google-apps.folder' and name='DumpYard' and trashed=false",
+            fields: 'files(id, name)',
+            spaces: 'drive'
+        });
+        
+        if (response.result.files && response.result.files.length > 0) {
+            this.folderId = response.result.files[0].id;
+        } else {
+            // Create folder
+            const folderMetadata = {
+                name: 'DumpYard',
+                mimeType: 'application/vnd.google-apps.folder'
+            };
+            const folder = await gapi.client.drive.files.create({
+                resource: folderMetadata,
+                fields: 'id'
+            });
+            this.folderId = folder.result.id;
+        }
+    }
+    
+    async saveToGDrive(noteObj) {
+        if (!this.folderId) return;
+        const filename = `note_${noteObj.id}.json`;
+        const content = JSON.stringify(noteObj, null, 2);
+        
+        // Check if file exists
+        const res = await gapi.client.drive.files.list({
+            q: `'${this.folderId}' in parents and name='${filename}' and trashed=false`,
+            fields: 'files(id)'
+        });
+        
+        const file = new Blob([content], {type: 'application/json'});
+        const metadata = {
+            name: filename,
+            mimeType: 'application/json'
+        };
+        
+        const accessToken = gapi.client.getToken().access_token;
+        const form = new FormData();
+        form.append('metadata', new Blob([JSON.stringify(metadata)], {type: 'application/json'}));
+        form.append('file', file);
+        
+        if (res.result.files && res.result.files.length > 0) {
+            // Update existing
+            const fileId = res.result.files[0].id;
+            await fetch(`https://www.googleapis.com/upload/drive/v3/files/${fileId}?uploadType=multipart`, {
+                method: 'PATCH',
+                headers: { 'Authorization': 'Bearer ' + accessToken },
+                body: form
+            });
+        } else {
+            // Create new
+            metadata.parents = [this.folderId];
+            const createForm = new FormData();
+            createForm.append('metadata', new Blob([JSON.stringify(metadata)], {type: 'application/json'}));
+            createForm.append('file', file);
+            
+            await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart', {
+                method: 'POST',
+                headers: { 'Authorization': 'Bearer ' + accessToken },
+                body: createForm
+            });
+        }
+    }
+    
+    async loadFromGDrive() {
+        if (!this.folderId) return [];
+        const notes = [];
+        try {
+            const res = await gapi.client.drive.files.list({
+                q: `'${this.folderId}' in parents and trashed=false`,
+                fields: 'files(id, name)'
+            });
+            
+            const accessToken = gapi.client.getToken().access_token;
+            for (let file of res.result.files) {
+                if (file.name.endsWith('.json') && file.name.startsWith('note_')) {
+                    const fileRes = await fetch(`https://www.googleapis.com/drive/v3/files/${file.id}?alt=media`, {
+                        headers: { 'Authorization': 'Bearer ' + accessToken }
+                    });
+                    const text = await fileRes.text();
+                    notes.push(JSON.parse(text));
+                }
+            }
+            return notes;
+        } catch (e) {
+            console.error("GDrive load error", e);
+            return [];
+        }
+    }
+
+    async deleteFromGDrive(id) {
+        if (!this.folderId) return;
+        const filename = `note_${id}.json`;
+        const res = await gapi.client.drive.files.list({
+            q: `'${this.folderId}' in parents and name='${filename}' and trashed=false`,
+            fields: 'files(id)'
+        });
+        if (res.result.files && res.result.files.length > 0) {
+            await gapi.client.drive.files.delete({
+                fileId: res.result.files[0].id
+            });
+        }
+    }
+    
     async migrateLocalToDrive() {
-        alert('Migration to Google Drive will be available once Client ID is configured!');
+        if (this.CLIENT_ID.includes('YOUR_GOOGLE_CLIENT_ID_HERE')) {
+            alert('Migration to Google Drive will be available once Client ID is configured in storage.js!');
+            return;
+        }
+        
+        try {
+            await this.initGoogleAPI();
+            // Read from local folder
+            const localNotes = await this.loadFromLocalFolder();
+            if (localNotes.length === 0) {
+                alert('No notes found in local folder to migrate.');
+                return;
+            }
+            
+            document.getElementById('migrationSection').innerHTML = `<p class="text-xs text-green-400">Migrating ${localNotes.length} notes...</p>`;
+            
+            for (let note of localNotes) {
+                await this.saveToGDrive(note);
+            }
+            
+            alert('Migration successful! Switching to Google Drive mode.');
+            this.setMode('gdrive');
+        } catch (e) {
+            console.error('Migration failed', e);
+            alert('Migration failed. Check console.');
+        }
     }
 }
 
