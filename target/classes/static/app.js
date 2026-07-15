@@ -46,7 +46,6 @@ async function setupCodeMirror(isVimMode) {
     handleEditorChange(savedContent);
 }
 import MarkdownIt from 'https://esm.sh/markdown-it';
-import mermaid from 'https://esm.sh/mermaid';
 
 // State Management for Multi-Tab Notes
 let notes = []; // Array of { id, title, content, updatedAt }
@@ -285,10 +284,12 @@ async function renameNote(id) {
 
 async function deleteNote(id) {
     if (notes.length <= 1) {
-        alert('You must have at least one tab.');
+        await window.showDialog('You must have at least one tab.');
         return;
     }
-    if (confirm('Are you sure you want to delete this tab and all its sub-tabs?')) {
+    
+    const isConfirmed = await window.showDialog('Are you sure you want to delete this tab and all its sub-tabs?', 'confirm', 'Delete Tab');
+    if (isConfirmed) {
         // Recursive deletion helper
         function getAllChildrenIds(parentId) {
             let ids = [parentId];
@@ -414,11 +415,13 @@ const md = new MarkdownIt({
 });
 
 // Setup Mermaid
-mermaid.initialize({
-    startOnLoad: false,
-    theme: 'dark',
-    securityLevel: 'loose'
-});
+if (window.mermaid) {
+    window.mermaid.initialize({
+        startOnLoad: false,
+        theme: 'dark',
+        securityLevel: 'loose'
+    });
+}
 
 // Smart JSON Extractor: Finds raw JSON mixed with text and wraps it
 function extractAndWrapRawJSON(text) {
@@ -753,7 +756,7 @@ async function renderPreview(rawContent) {
             defaultMode = 'preview';
             // Clean up nested backticks if ChatGPT double-wrapped it
             let cleanMermaid = code.replace(/```mermaid\s*/ig, '').replace(/```\s*$/g, '').trim();
-            previewHtml = `<div class="mermaid-container p-4 flex justify-center"><pre class="mermaid">${cleanMermaid}</pre></div>`;
+            previewHtml = `<div class="mermaid-container p-4 flex justify-center"><pre class="mermaid">${md.utils.escapeHtml(cleanMermaid)}</pre></div>`;
         } else if (info === 'json') {
             try {
                 const parsedJson = JSON.parse(code);
@@ -823,15 +826,126 @@ async function renderPreview(rawContent) {
 
     // 5. Trigger Mermaid rendering
     try {
-        await mermaid.run({
-            querySelector: '.mermaid'
+        if (window.mermaid) {
+            await window.mermaid.run({
+                querySelector: '.mermaid'
+            });
+        }
+        
+        // 6. Setup Zoom/Pan for rendered Mermaid SVGs
+        const renderedMermaids = previewContainer.querySelectorAll('.mermaid svg');
+        renderedMermaids.forEach(svg => {
+            svg.classList.add('cursor-zoom-in', 'hover:opacity-90', 'transition-opacity');
+            svg.addEventListener('click', () => {
+                const modal = document.getElementById('diagramModal');
+                const content = document.getElementById('diagramModalContent');
+                if (!modal || !content) return;
+                
+                // Inject cloned SVG
+                content.innerHTML = '';
+                const clonedSvg = svg.cloneNode(true);
+                clonedSvg.classList.remove('cursor-zoom-in', 'hover:opacity-90');
+                // Make it responsive but allow scale
+                clonedSvg.style.maxWidth = '90vw';
+                clonedSvg.style.maxHeight = '80vh';
+                clonedSvg.style.transformOrigin = 'center center';
+                clonedSvg.style.transition = 'transform 0.1s ease-out';
+                content.appendChild(clonedSvg);
+                
+                // Show modal
+                modal.classList.remove('hidden');
+                setTimeout(() => modal.classList.remove('opacity-0'), 10);
+                
+                // Initialize Zoom & Pan state
+                let scale = 1;
+                let panX = 0;
+                let panY = 0;
+                let isDragging = false;
+                let startX, startY;
+                
+                const updateTransform = () => {
+                    clonedSvg.style.transform = `translate(${panX}px, ${panY}px) scale(${scale})`;
+                };
+                
+                // Wheel Zoom
+                content.onwheel = (e) => {
+                    e.preventDefault();
+                    const zoomSensitivity = 0.05;
+                    if (e.deltaY < 0) {
+                        scale += zoomSensitivity; // zoom in
+                    } else {
+                        scale = Math.max(0.2, scale - zoomSensitivity); // zoom out (min 0.2)
+                    }
+                    updateTransform();
+                };
+                
+                // Mouse Drag to Pan
+                content.onmousedown = (e) => {
+                    isDragging = true;
+                    startX = e.clientX - panX;
+                    startY = e.clientY - panY;
+                    content.classList.replace('cursor-grab', 'cursor-grabbing');
+                };
+                
+                content.onmousemove = (e) => {
+                    if (!isDragging) return;
+                    e.preventDefault();
+                    panX = e.clientX - startX;
+                    panY = e.clientY - startY;
+                    updateTransform();
+                };
+                
+                content.onmouseup = () => {
+                    isDragging = false;
+                    content.classList.replace('cursor-grabbing', 'cursor-grab');
+                };
+                content.onmouseleave = content.onmouseup;
+            });
         });
+
     } catch (e) {
         console.error("Mermaid error:", e);
     }
 }
 
-// Main Initialization
+// --- Custom Dialog System ---
+window.showDialog = function(message, type = 'alert', title = 'Notice') {
+    return new Promise((resolve) => {
+        const overlay = document.getElementById('customDialogOverlay');
+        const box = document.getElementById('customDialogBox');
+        document.getElementById('customDialogTitle').innerText = title;
+        document.getElementById('customDialogMessage').innerText = message;
+        
+        const cancelBtn = document.getElementById('customDialogCancel');
+        const confirmBtn = document.getElementById('customDialogConfirm');
+        
+        if (type === 'confirm') {
+            cancelBtn.classList.remove('hidden');
+        } else {
+            cancelBtn.classList.add('hidden');
+        }
+        
+        overlay.classList.remove('hidden');
+        setTimeout(() => {
+            overlay.classList.remove('opacity-0');
+            box.classList.remove('scale-95');
+        }, 10);
+        
+        const closeDialog = (result) => {
+            overlay.classList.add('opacity-0');
+            box.classList.add('scale-95');
+            setTimeout(() => {
+                overlay.classList.add('hidden');
+                resolve(result);
+            }, 300);
+        };
+        
+        confirmBtn.onclick = () => closeDialog(true);
+        cancelBtn.onclick = () => closeDialog(false);
+    });
+};
+
+// --- Core Initialization ---
 document.addEventListener('DOMContentLoaded', async () => {
     // Check global toggle
     const isVim = localStorage.getItem('vimMode') === 'true';
@@ -857,28 +971,216 @@ document.addEventListener('DOMContentLoaded', async () => {
         });
     }
 
+    // Export helper function
+    function downloadFile(filename, content, type) {
+        const blob = new Blob([content], { type: type });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+    }
+
+    function getExportTitle() {
+        if (!window.currentNote) return 'devvault_export';
+        return window.currentNote.title.replace(/[^a-z0-9]/gi, '_').toLowerCase() || 'devvault_export';
+    }
+
     // Export PDF Button event
-    const exportBtn = document.getElementById('exportPdfBtn');
-    if (exportBtn) {
-        exportBtn.addEventListener('click', () => {
+    const exportPdfBtn = document.getElementById('exportPdfBtn');
+    if (exportPdfBtn) {
+        exportPdfBtn.addEventListener('click', () => {
             const previewContainer = document.getElementById('preview-container');
             const opt = {
                 margin:       10,
-                filename:     'devvault_export.pdf',
+                filename:     `${getExportTitle()}.pdf`,
                 image:        { type: 'jpeg', quality: 0.98 },
                 html2canvas:  { scale: 2, useCORS: true, backgroundColor: '#0f172a' },
                 jsPDF:        { unit: 'mm', format: 'a4', orientation: 'portrait' }
             };
-            
-            // Add a temporary white-text class for better pdf reading if needed, 
-            // but we'll stick to the dark theme for now.
             html2pdf().set(opt).from(previewContainer).save();
         });
     }
+
+    // Export DOC Button event
+    const exportDocBtn = document.getElementById('exportDocBtn');
+    if (exportDocBtn) {
+        exportDocBtn.addEventListener('click', () => {
+            if (!window.currentNote) return;
+            const previewHtml = document.getElementById('preview-container').innerHTML;
+            const htmlContent = `
+                <html xmlns:o='urn:schemas-microsoft-com:office:office' xmlns:w='urn:schemas-microsoft-com:office:word' xmlns='http://www.w3.org/TR/REC-html40'>
+                <head><meta charset='utf-8'><title>${window.currentNote.title}</title></head>
+                <body>${previewHtml}</body>
+                </html>
+            `;
+            downloadFile(`${getExportTitle()}.doc`, htmlContent, 'application/msword');
+        });
+    }
+
+    // Export TXT Button event
+    const exportTxtBtn = document.getElementById('exportTxtBtn');
+    if (exportTxtBtn) {
+        exportTxtBtn.addEventListener('click', () => {
+            if (!window.currentNote) return;
+            // Provide raw text format (markdown is very readable as raw text)
+            downloadFile(`${getExportTitle()}.txt`, window.currentNote.content, 'text/plain');
+        });
+    }
+    
+    // Setup Diagram Modal Close Button
+    const closeDiagramBtn = document.getElementById('closeDiagramBtn');
+    if (closeDiagramBtn) {
+        closeDiagramBtn.addEventListener('click', () => {
+            const modal = document.getElementById('diagramModal');
+            if (modal) {
+                modal.classList.add('opacity-0');
+                setTimeout(() => {
+                    modal.classList.add('hidden');
+                    document.getElementById('diagramModalContent').innerHTML = '';
+                    // Clean up event listeners by removing them (they are on the container, but we just reset it)
+                    const content = document.getElementById('diagramModalContent');
+                    content.onwheel = null;
+                    content.onmousedown = null;
+                    content.onmousemove = null;
+                    content.onmouseup = null;
+                    content.onmouseleave = null;
+                }, 300);
+            }
+        });
+    }
+    
+    // --- UI Enhancements ---
+
+    // 1. Sidebar Toggle Logic
+    const sidebarToggleBtn = document.getElementById('sidebarToggle');
+    const sidebar = document.getElementById('sidebar');
+    let isSidebarOpen = true;
+    if (sidebarToggleBtn && sidebar) {
+        sidebarToggleBtn.addEventListener('click', () => {
+            isSidebarOpen = !isSidebarOpen;
+            if (isSidebarOpen) {
+                sidebar.classList.remove('w-0', '-translate-x-full');
+                sidebar.classList.add('w-64', 'translate-x-0');
+            } else {
+                sidebar.classList.remove('w-64', 'translate-x-0');
+                sidebar.classList.add('w-0', '-translate-x-full');
+            }
+        });
+    }
+
+    // 2. Resizable Panels Logic
+    const resizer = document.getElementById('resizer');
+    const editorSection = document.getElementById('editor-section');
+    const previewSection = document.getElementById('preview-section');
+    let isResizing = false;
+
+    if (resizer && editorSection && previewSection) {
+        resizer.addEventListener('mousedown', (e) => {
+            isResizing = true;
+            document.body.style.cursor = 'col-resize';
+            // Disable transitions during resize for smooth dragging
+            editorSection.classList.remove('transition-all', 'duration-300');
+            previewSection.classList.remove('transition-all', 'duration-300');
+        });
+
+        document.addEventListener('mousemove', (e) => {
+            if (!isResizing) return;
+            // Calculate new width for editor based on mouse X (considering sidebar width if open)
+            const sidebarWidth = isSidebarOpen ? sidebar.offsetWidth : 0;
+            let newWidth = e.clientX - sidebarWidth;
+            // Constrain min/max widths
+            if (newWidth < 100) newWidth = 100;
+            const maxWidth = window.innerWidth - sidebarWidth - 100;
+            if (newWidth > maxWidth) newWidth = maxWidth;
+            
+            // Remove w-1/2 tailwind class if present to allow custom width
+            editorSection.classList.remove('w-1/2');
+            editorSection.style.width = `${newWidth}px`;
+            editorSection.style.flex = 'none';
+        });
+
+        document.addEventListener('mouseup', () => {
+            if (isResizing) {
+                isResizing = false;
+                document.body.style.cursor = 'default';
+                // Re-enable transitions
+                editorSection.classList.add('transition-all', 'duration-300');
+                previewSection.classList.add('transition-all', 'duration-300');
+            }
+        });
+    }
+
+    // 3. Prettier Auto-Format (Lazy Loaded)
+    const formatCodeBtn = document.getElementById('formatCodeBtn');
+    if (formatCodeBtn) {
+        formatCodeBtn.addEventListener('click', async () => {
+            if (!window.editor) return;
+            
+            // Change button state
+            const originalHtml = formatCodeBtn.innerHTML;
+            formatCodeBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin text-sky-400"></i> Formatting...';
+            
+            try {
+                // Dynamically import Prettier standalone and plugins from CDN
+                if (!window.prettier) {
+                    await import('https://unpkg.com/prettier@3.0.3/standalone.js');
+                    await import('https://unpkg.com/prettier@3.0.3/plugins/markdown.js');
+                    await import('https://unpkg.com/prettier@3.0.3/plugins/html.js');
+                    await import('https://unpkg.com/prettier@3.0.3/plugins/estree.js');
+                    await import('https://unpkg.com/prettier@3.0.3/plugins/babel.js');
+                    await import('https://unpkg.com/prettier@3.0.3/plugins/postcss.js');
+                    await import('https://unpkg.com/prettier@3.0.3/plugins/yaml.js');
+                }
+                
+                const currentContent = window.editor.state.doc.toString();
+                
+                // Format using Prettier (Markdown parser automatically formats inner code blocks too)
+                const formatted = await prettier.format(currentContent, {
+                    parser: "markdown",
+                    plugins: prettierPlugins
+                });
+                
+                // Update editor content
+                window.editor.dispatch({
+                    changes: { from: 0, to: window.editor.state.doc.length, insert: formatted }
+                });
+                
+            } catch (err) {
+                console.error("Formatting failed:", err);
+                await window.showDialog("Formatting failed. Check console for details.", "alert", "Error");
+            } finally {
+                formatCodeBtn.innerHTML = originalHtml;
+            }
+        });
+    }
+    
+    // Add Ctrl+Shift+F shortcut for formatting
+    document.addEventListener('keydown', (e) => {
+        if (e.ctrlKey && e.shiftKey && (e.key === 'f' || e.key === 'F')) {
+            e.preventDefault();
+            if (formatCodeBtn) formatCodeBtn.click();
+        }
+    });
+
 });
 
 let saveTimeout;
+let renderTimeout;
+let hasUnsavedChanges = false;
+
+window.addEventListener('beforeunload', (e) => {
+    if (hasUnsavedChanges) {
+        e.preventDefault();
+        e.returnValue = 'You have unsaved changes. Are you sure you want to leave?';
+    }
+});
+
 async function handleEditorChange(content) {
+    hasUnsavedChanges = true;
     // Wait for user to stop typing to prevent lag and excessive API calls
     clearTimeout(saveTimeout);
     
@@ -886,6 +1188,7 @@ async function handleEditorChange(content) {
     if (currentNoteId) {
         saveTimeout = setTimeout(async () => {
             await saveNoteContent(currentNoteId, content);
+            hasUnsavedChanges = false;
             
             const saveStatus = document.getElementById('saveStatus');
             if (saveStatus) {
@@ -896,7 +1199,10 @@ async function handleEditorChange(content) {
         }, 800);
     }
     
-    // Continue processing markdown preview
-    const cleanedText = preprocessText(content);
-    renderPreview(cleanedText);
+    // Debounce processing markdown preview for high performance (300ms)
+    clearTimeout(renderTimeout);
+    renderTimeout = setTimeout(() => {
+        const cleanedText = preprocessText(content);
+        renderPreview(cleanedText);
+    }, 300);
 }

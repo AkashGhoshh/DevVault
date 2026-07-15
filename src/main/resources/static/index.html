@@ -35,6 +35,16 @@
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/atom-one-dark.min.css">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
     
+    <!-- Mermaid JS for Diagrams -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/mermaid/10.9.0/mermaid.min.js"></script>
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            if (window.mermaid) {
+                mermaid.initialize({ startOnLoad: false, theme: 'dark' });
+            }
+        });
+    </script>
+    
     <!-- KaTeX for Math Rendering -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.8/katex.min.css">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.8/katex.min.js"></script>
@@ -46,13 +56,16 @@
 </head>
 <body class="bg-dark-900 text-slate-300 font-sans h-screen flex flex-col overflow-hidden">
 
-    <!-- Top Navbar -->
-    <nav class="glass-header border-b border-slate-700/50 px-6 py-3 flex justify-between items-center z-10 shrink-0">
+    <!-- Navbar -->
+    <nav class="h-14 border-b border-slate-700 bg-[#0B1120] flex items-center justify-between px-4 shrink-0 shadow-sm relative z-10">
         <div class="flex items-center gap-3">
-            <div class="w-8 h-8 bg-indigo-500 rounded flex items-center justify-center shrink-0">
-                <i class="fa-solid fa-vault"></i>
+            <button id="sidebarToggle" class="w-8 h-8 rounded-md bg-slate-800 text-slate-300 hover:text-white hover:bg-slate-700 transition-colors flex items-center justify-center shrink-0 shadow-sm">
+                <i class="fa-solid fa-bars"></i>
+            </button>
+            <div class="w-8 h-8 rounded-md bg-gradient-to-br from-sky-400 to-indigo-500 flex items-center justify-center shadow-lg shadow-sky-500/20">
+                <i class="fa-solid fa-layer-group text-white text-sm"></i>
             </div>
-            <h1 class="text-xl font-semibold text-white tracking-tight">Dev Vault <span class="text-xs text-slate-400 font-normal">v1.0</span></h1>
+            <h1 class="font-bold text-lg tracking-tight bg-clip-text text-transparent bg-gradient-to-r from-white to-slate-400">Dev Vault</h1>
         </div>
         <div class="flex gap-4 items-center">
             <!-- Storage Settings -->
@@ -74,18 +87,31 @@
             <button id="toggleVim" class="text-xs px-3 py-1.5 rounded bg-slate-800 border border-slate-700 hover:bg-slate-700 transition-colors ml-2">
                 <i class="fa-solid fa-keyboard mr-1"></i> Vim Mode: <span id="vimStatus" class="text-slate-400">OFF</span>
             </button>
-            <button id="exportPdfBtn" class="text-sm px-4 py-1.5 rounded-md bg-accent text-slate-900 font-medium hover:bg-sky-300 transition-colors shadow-lg shadow-sky-500/20">
-                <i class="fa-solid fa-file-pdf mr-1"></i> Export PDF
-            </button>
+            <div class="relative group">
+                <button id="exportDropdownBtn" class="text-sm px-4 py-1.5 rounded-md bg-accent text-slate-900 font-medium hover:bg-sky-300 transition-colors shadow-lg shadow-sky-500/20 flex items-center gap-2">
+                    <i class="fa-solid fa-download"></i> Export <i class="fa-solid fa-chevron-down text-xs"></i>
+                </button>
+                <div class="absolute right-0 mt-2 w-48 bg-slate-800 rounded-md shadow-xl opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all border border-slate-700 z-50 overflow-hidden">
+                    <button id="exportPdfBtn" class="w-full text-left px-4 py-2 text-sm text-slate-300 hover:bg-indigo-500 hover:text-white flex items-center gap-2">
+                        <i class="fa-solid fa-file-pdf"></i> as PDF
+                    </button>
+                    <button id="exportDocBtn" class="w-full text-left px-4 py-2 text-sm text-slate-300 hover:bg-indigo-500 hover:text-white flex items-center gap-2">
+                        <i class="fa-solid fa-file-word"></i> as Word Document
+                    </button>
+                    <button id="exportTxtBtn" class="w-full text-left px-4 py-2 text-sm text-slate-300 hover:bg-indigo-500 hover:text-white flex items-center gap-2">
+                        <i class="fa-solid fa-file-lines"></i> as Text
+                    </button>
+                </div>
+            </div>
         </div>
     </nav>
 
     <!-- Main Workspace -->
     <main class="flex-1 flex overflow-hidden">
         
-        <!-- Sidebar for Notes/Tabs -->
-        <aside class="w-64 bg-[#0B1120] border-r border-slate-800 flex flex-col shrink-0">
-            <div class="p-4 border-b border-slate-800">
+        <!-- Sidebar -->
+        <aside id="sidebar" class="w-64 bg-[#0B1120] border-r border-slate-800 flex flex-col shrink-0 transition-all duration-300 overflow-hidden translate-x-0">
+            <div class="p-4 border-b border-slate-800/50 flex justify-between items-center bg-slate-900/20">
                 <button id="newNoteBtn" class="w-full flex items-center justify-start gap-2 px-3 py-2.5 rounded-lg bg-accent text-slate-900 hover:bg-sky-300 transition-all font-semibold shadow-lg shadow-sky-500/10">
                     <i class="fa-solid fa-plus"></i> New Note
                 </button>
@@ -108,12 +134,15 @@
             <div id="editor-container" class="flex-1 overflow-hidden font-mono text-sm"></div>
         </section>
 
+        <!-- Resizer -->
+        <div id="resizer" class="w-1 bg-slate-800 hover:bg-sky-500 cursor-col-resize transition-colors shrink-0 z-20"></div>
+
         <!-- Preview Section -->
-        <section id="preview-section" class="w-1/2 flex flex-col bg-dark-900 relative transition-all duration-300">
+        <section id="preview-section" class="flex-1 flex flex-col bg-dark-900 relative transition-all duration-300">
             <div class="text-xs font-mono text-slate-500 bg-slate-800/50 px-4 py-2 border-b border-slate-800 flex justify-between items-center backdrop-blur-md">
                 <span>PREVIEW // RENDERED</span>
                 <div class="flex gap-2">
-                    <button class="hover:text-white" title="Format Document"><i class="fa-solid fa-wand-magic-sparkles"></i></button>
+                    <button id="formatCodeBtn" class="hover:text-white transition-colors" title="Format Document (Ctrl+Shift+F)"><i class="fa-solid fa-wand-magic-sparkles text-sky-400"></i> Auto-Format</button>
                 </div>
             </div>
             <!-- Rendered content -->
@@ -178,5 +207,31 @@
     <!-- Storage Manager & ESM Modules Script -->
     <script src="storage.js"></script>
     <script type="module" src="app.js"></script>
+
+    <!-- Custom Dialog Modal -->
+    <div id="customDialogOverlay" class="fixed inset-0 bg-black/80 z-[200] hidden flex justify-center items-center backdrop-blur-md opacity-0 transition-opacity duration-300">
+        <div id="customDialogBox" class="bg-[#1e293b] border border-slate-700 p-6 rounded-xl shadow-2xl max-w-sm w-full transform scale-95 transition-transform duration-300">
+            <h3 id="customDialogTitle" class="text-lg font-bold text-white mb-2">Notice</h3>
+            <p id="customDialogMessage" class="text-slate-300 text-sm mb-6">Message goes here.</p>
+            <div id="customDialogActions" class="flex justify-end gap-3">
+                <button id="customDialogCancel" class="px-4 py-2 rounded-lg bg-slate-700 text-white hover:bg-slate-600 transition-colors hidden font-semibold text-sm">Cancel</button>
+                <button id="customDialogConfirm" class="px-4 py-2 rounded-lg bg-sky-500 text-white hover:bg-sky-400 transition-colors font-semibold text-sm shadow-lg shadow-sky-500/20">OK</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Mermaid Zoom Modal -->
+    <div id="diagramModal" class="fixed inset-0 bg-black/95 z-[150] hidden flex-col justify-center items-center backdrop-blur-md opacity-0 transition-opacity duration-300">
+        <button id="closeDiagramBtn" class="absolute top-6 right-6 w-10 h-10 bg-slate-800 text-slate-300 hover:text-white rounded-full hover:bg-red-500 transition-colors flex items-center justify-center text-xl shadow-lg z-[160]">
+            <i class="fa-solid fa-xmark"></i>
+        </button>
+        <div class="absolute top-6 left-6 text-slate-400 text-xs font-mono bg-slate-900/80 px-4 py-2 rounded-lg border border-slate-800 shadow-lg z-[160]">
+            <i class="fa-solid fa-mouse mr-2"></i> Scroll to zoom &bull; Click & Drag to pan
+        </div>
+        <div id="diagramModalContent" class="cursor-grab overflow-visible w-full h-full flex items-center justify-center">
+            <!-- SVG will be injected here -->
+        </div>
+    </div>
+
 </body>
 </html>

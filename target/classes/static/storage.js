@@ -40,6 +40,55 @@ document.getElementById('storageModal')?.addEventListener('click', (e) => {
     }
 });
 
+// Helper utilities for Markdown storage with Frontmatter
+function noteToMarkdown(noteObj) {
+    const frontmatter = [
+        '---',
+        `id: ${noteObj.id}`,
+        `parentId: ${noteObj.parentId || 'null'}`,
+        `title: ${noteObj.title || 'Untitled Note'}`,
+        `updatedAt: ${noteObj.updatedAt}`,
+        `isExpanded: ${noteObj.isExpanded}`,
+        '---'
+    ].join('\n');
+    return `${frontmatter}\n${noteObj.content || ''}`;
+}
+
+function markdownToNote(markdownStr) {
+    const note = {
+        id: null,
+        parentId: null,
+        title: 'Untitled Note',
+        content: '',
+        updatedAt: Date.now(),
+        isExpanded: false
+    };
+
+    const frontmatterRegex = /^---\n([\s\S]*?)\n---\n([\s\S]*)$/;
+    const match = markdownStr.match(frontmatterRegex);
+
+    if (match) {
+        const yamlStr = match[1];
+        note.content = match[2];
+        const lines = yamlStr.split('\n');
+        lines.forEach(line => {
+            const splitIdx = line.indexOf(':');
+            if (splitIdx > -1) {
+                const key = line.substring(0, splitIdx).trim();
+                let val = line.substring(splitIdx + 1).trim();
+                if (key === 'id') note.id = val;
+                else if (key === 'parentId') note.parentId = val === 'null' ? null : val;
+                else if (key === 'title') note.title = val;
+                else if (key === 'updatedAt') note.updatedAt = parseInt(val, 10) || Date.now();
+                else if (key === 'isExpanded') note.isExpanded = val === 'true';
+            }
+        });
+    } else {
+        note.content = markdownStr;
+    }
+    return note;
+}
+
 class StorageManager {
     constructor() {
         this.mode = localStorage.getItem('dumpyard_storage_mode') || 'localstorage';
@@ -83,14 +132,22 @@ class StorageManager {
             }
         } else if (newMode === 'gdrive') {
             if (this.CLIENT_ID.includes('YOUR_GOOGLE_CLIENT_ID_HERE')) {
-                alert('Google Drive Sync requires you to configure the CLIENT_ID in storage.js first.');
+                if (window.showDialog) {
+                    await window.showDialog('Google Drive Sync requires you to configure the CLIENT_ID in storage.js first.', 'alert', 'Configuration Required');
+                } else {
+                    alert('Google Drive Sync requires you to configure the CLIENT_ID in storage.js first.');
+                }
                 return;
             }
             try {
                 await this.initGoogleAPI();
             } catch (e) {
                 console.error('Drive setup failed', e);
-                alert('Failed to connect to Google Drive.');
+                if (window.showDialog) {
+                    await window.showDialog('Failed to connect to Google Drive.', 'alert', 'Connection Error');
+                } else {
+                    alert('Failed to connect to Google Drive.');
+                }
                 return;
             }
         }
@@ -172,7 +229,7 @@ class StorageManager {
     // --- Local Folder Implementation (File System Access API) ---
     async getDirHandle() {
         if (this.localDirHandle) return this.localDirHandle;
-        alert("Please re-select your local folder to grant permission.");
+        await window.showDialog("Please re-select your local folder to grant permission.", "alert", "Permission Required");
         this.localDirHandle = await window.showDirectoryPicker();
         return this.localDirHandle;
     }
@@ -180,12 +237,19 @@ class StorageManager {
     async saveToLocalFolder(noteObj) {
         try {
             const dirHandle = await this.getDirHandle();
-            // We save it as a .json file containing the full note object (so we keep the id, title, and children metadata)
-            const filename = `note_${noteObj.id}.json`;
+            // We save it as a .md file containing the note with YAML frontmatter
+            const filename = `note_${noteObj.id}.md`;
             const fileHandle = await dirHandle.getFileHandle(filename, { create: true });
             const writable = await fileHandle.createWritable();
-            await writable.write(JSON.stringify(noteObj, null, 2));
+            await writable.write(noteToMarkdown(noteObj));
             await writable.close();
+            
+            // Delete the old .json file if it exists to avoid duplicates after migration
+            try {
+                await dirHandle.removeEntry(`note_${noteObj.id}.json`);
+            } catch (e) {
+                // Ignore if it doesn't exist
+            }
         } catch (e) {
             console.error("Local folder write failed", e);
         }
@@ -196,11 +260,16 @@ class StorageManager {
             const dirHandle = await this.getDirHandle();
             const notes = [];
             for await (const entry of dirHandle.values()) {
-                if (entry.kind === 'file' && entry.name.endsWith('.json') && entry.name.startsWith('note_')) {
-                    const file = await entry.getFile();
+                if (entry.kind === 'file' && entry.name.startsWith('note_')) {
+                    const fileHandle = await dirHandle.getFileHandle(entry.name);
+                    const file = await fileHandle.getFile();
                     const text = await file.text();
                     try {
-                        notes.push(JSON.parse(text));
+                        if (entry.name.endsWith('.json')) {
+                            notes.push(JSON.parse(text));
+                        } else if (entry.name.endsWith('.md')) {
+                            notes.push(markdownToNote(text));
+                        }
                     } catch (e) {
                         console.error("Failed to parse local file", entry.name);
                     }
@@ -216,8 +285,12 @@ class StorageManager {
     async deleteFromLocalFolder(id) {
         try {
             const dirHandle = await this.getDirHandle();
-            const filename = `note_${id}.json`;
-            await dirHandle.removeEntry(filename);
+            try {
+                await dirHandle.removeEntry(`note_${id}.md`);
+            } catch (e) {}
+            try {
+                await dirHandle.removeEntry(`note_${id}.json`);
+            } catch (e) {}
         } catch (e) {
             console.error("Failed to delete file", id);
         }
@@ -285,22 +358,24 @@ class StorageManager {
             this.folderId = folder.result.id;
         }
     }
-
+    
     async saveToGDrive(noteObj) {
         if (!this.folderId) return;
-        const filename = `note_${noteObj.id}.json`;
-        const content = JSON.stringify(noteObj, null, 2);
-
-        // Check if file exists
+        const jsonFilename = `note_${noteObj.id}.json`;
+        const mdFilename = `note_${noteObj.id}.md`;
+        const content = noteToMarkdown(noteObj);
+        
+        // Check if file exists (either .json or .md)
         const res = await gapi.client.drive.files.list({
-            q: `'${this.folderId}' in parents and name='${filename}' and trashed=false`,
-            fields: 'files(id)'
+            q: `'${this.folderId}' in parents and (name='${jsonFilename}' or name='${mdFilename}') and trashed=false`,
+            fields: 'files(id, name)',
+            spaces: 'drive'
         });
 
-        const file = new Blob([content], { type: 'application/json' });
+        const file = new Blob([content], { type: 'text/markdown' });
         const metadata = {
-            name: filename,
-            mimeType: 'application/json'
+            name: mdFilename,
+            mimeType: 'text/markdown'
         };
 
         const accessToken = gapi.client.getToken().access_token;
@@ -309,20 +384,27 @@ class StorageManager {
         form.append('file', file);
 
         if (res.result.files && res.result.files.length > 0) {
-            // Update existing
+            // Update existing (will update the first matched file)
             const fileId = res.result.files[0].id;
+            
+            // If the existing file was a .json, we should ideally rename it to .md
+            // The upload API with PATCH metadata handles this.
+            
             await fetch(`https://www.googleapis.com/upload/drive/v3/files/${fileId}?uploadType=multipart`, {
                 method: 'PATCH',
                 headers: { 'Authorization': 'Bearer ' + accessToken },
                 body: form
             });
+            
+            // If there were duplicates (both .json and .md somehow), we could delete the others, 
+            // but for simplicity, we just update one and assume it becomes .md.
         } else {
             // Create new
             metadata.parents = [this.folderId];
             const createForm = new FormData();
             createForm.append('metadata', new Blob([JSON.stringify(metadata)], { type: 'application/json' }));
             createForm.append('file', file);
-
+            
             await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart', {
                 method: 'POST',
                 headers: { 'Authorization': 'Bearer ' + accessToken },
@@ -342,12 +424,18 @@ class StorageManager {
 
             const accessToken = gapi.client.getToken().access_token;
             for (let file of res.result.files) {
-                if (file.name.endsWith('.json') && file.name.startsWith('note_')) {
+                if ((file.name.endsWith('.json') || file.name.endsWith('.md')) && file.name.startsWith('note_')) {
                     const fileRes = await fetch(`https://www.googleapis.com/drive/v3/files/${file.id}?alt=media`, {
                         headers: { 'Authorization': 'Bearer ' + accessToken }
                     });
                     const text = await fileRes.text();
-                    notes.push(JSON.parse(text));
+                    try {
+                        if (file.name.endsWith('.json')) {
+                            notes.push(JSON.parse(text));
+                        } else if (file.name.endsWith('.md')) {
+                            notes.push(markdownToNote(text));
+                        }
+                    } catch (e) { console.error("Failed to parse GDrive file", file.name); }
                 }
             }
             return notes;
@@ -359,21 +447,26 @@ class StorageManager {
 
     async deleteFromGDrive(id) {
         if (!this.folderId) return;
-        const filename = `note_${id}.json`;
+        
+        // Find existing file (both extensions) to delete
         const res = await gapi.client.drive.files.list({
-            q: `'${this.folderId}' in parents and name='${filename}' and trashed=false`,
-            fields: 'files(id)'
+            q: `'${this.folderId}' in parents and (name='note_${id}.json' or name='note_${id}.md') and trashed=false`,
+            fields: 'files(id)',
+            spaces: 'drive'
         });
+        
         if (res.result.files && res.result.files.length > 0) {
-            await gapi.client.drive.files.delete({
-                fileId: res.result.files[0].id
-            });
+            for (let file of res.result.files) {
+                await gapi.client.drive.files.delete({
+                    fileId: file.id
+                });
+            }
         }
     }
 
     async migrateLocalToDrive() {
         if (this.CLIENT_ID.includes('YOUR_GOOGLE_CLIENT_ID_HERE')) {
-            alert('Migration to Google Drive will be available once Client ID is configured in storage.js!');
+            await window.showDialog('Migration to Google Drive will be available once Client ID is configured in storage.js!', 'alert', 'Setup Required');
             return;
         }
 
@@ -382,7 +475,7 @@ class StorageManager {
             // Read from local folder
             const localNotes = await this.loadFromLocalFolder();
             if (localNotes.length === 0) {
-                alert('No notes found in local folder to migrate.');
+                await window.showDialog('No notes found in local folder to migrate.', 'alert', 'Migration Empty');
                 return;
             }
 
@@ -392,11 +485,11 @@ class StorageManager {
                 await this.saveToGDrive(note);
             }
 
-            alert('Migration successful! Switching to Google Drive mode.');
-            this.setMode('gdrive');
+            await window.showDialog('Migration successful! Switching to Google Drive mode.', 'alert', 'Success');
+            await this.setMode('gdrive');
         } catch (e) {
-            console.error('Migration failed', e);
-            alert('Migration failed. Check console.');
+            console.error('Migration failed:', e);
+            await window.showDialog('Migration failed. Check console for details.', 'alert', 'Migration Error');
         }
     }
 }
