@@ -57,24 +57,64 @@ function generateId() {
 
 async function loadNotes() {
     try {
-        const storedNotes = await window.storageManager.loadNotes();
-        if (storedNotes && storedNotes.length > 0) {
-            notes = storedNotes;
-            // Ensure schema backward compatibility for existing notes
-            notes.forEach(n => {
-                if (n.parentId === undefined) n.parentId = null;
-                if (n.isExpanded === undefined) n.isExpanded = false;
-            });
+        if (window.currentToken) {
+            // Load from backend
+            let endpoint = '';
+            if (window.currentRole === 'owner') endpoint = `/api/pastes/owner/${window.currentToken}`;
+            else if (window.currentRole === 'suggest') endpoint = `/api/pastes/suggest/${window.currentToken}`;
+            else if (window.currentRole === 'read') endpoint = `/api/pastes/read/${window.currentToken}`;
+            
+            const res = await fetch(endpoint);
+            if (res.ok) {
+                const data = await res.json();
+                notes = [{
+                    id: 'cloud_note',
+                    parentId: null,
+                    title: 'Shared Note',
+                    content: data.content,
+                    updatedAt: Date.now(),
+                    isExpanded: true
+                }];
+                // If it's a read-only token, force the UI into read mode
+                if (window.currentRole === 'read') {
+                    window.toggleAppMode('read');
+                }
+            } else {
+                alert("Could not load shared note. It may have been deleted.");
+                notes = [{
+                    id: generateId(),
+                    parentId: null,
+                    title: 'Untitled Note',
+                    content: '',
+                    updatedAt: Date.now(),
+                    isExpanded: true
+                }];
+                // Remove the invalid token from URL
+                window.history.pushState({}, '', '/');
+                window.currentRole = 'new';
+                window.currentToken = null;
+            }
         } else {
-            // First time or empty
-            notes.push({
-                id: generateId(),
-                parentId: null,
-                title: 'Untitled Note',
-                content: '',
-                updatedAt: Date.now(),
-                isExpanded: true
-            });
+            // Original LocalStorage logic
+            const storedNotes = await window.storageManager.loadNotes();
+            if (storedNotes && storedNotes.length > 0) {
+                notes = storedNotes;
+                // Ensure schema backward compatibility for existing notes
+                notes.forEach(n => {
+                    if (n.parentId === undefined) n.parentId = null;
+                    if (n.isExpanded === undefined) n.isExpanded = false;
+                });
+            } else {
+                // First time or empty
+                notes.push({
+                    id: generateId(),
+                    parentId: null,
+                    title: 'Untitled Note',
+                    content: '',
+                    updatedAt: Date.now(),
+                    isExpanded: true
+                });
+            }
         }
     } catch (e) {
         console.error("Failed to load notes", e);
@@ -107,6 +147,45 @@ async function saveNoteContent(id, content) {
     
     await window.storageManager.saveNote(note);
     renderSidebar(); // Update title in sidebar if changed
+
+    // Cloud Sync Logic
+    if (window.currentRole === 'read') return;
+    
+    try {
+        if (window.currentRole === 'new') {
+            const res = await fetch('/api/pastes', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ content })
+            });
+            if (res.ok) {
+                const data = await res.json();
+                window.history.pushState({}, '', `?owner=${data.ownerToken}`);
+                window.currentRole = 'owner';
+                window.currentToken = data.ownerToken;
+                document.getElementById('shareBtn').classList.remove('hidden');
+                document.getElementById('pendingEditsBtn').classList.remove('hidden');
+            }
+        } else if (window.currentRole === 'owner') {
+            await fetch(`/api/pastes/owner/${window.currentToken}`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ content })
+            });
+        } else if (window.currentRole === 'suggest') {
+            await fetch(`/api/pastes/suggest/${window.currentToken}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ content })
+            });
+        }
+        const saveStatus = document.getElementById('saveStatus');
+        if (saveStatus) {
+            saveStatus.innerHTML = '<i class="fa-solid fa-cloud-check mr-1 text-sky-400"></i>Synced to cloud';
+        }
+    } catch (e) {
+        console.error("Cloud sync failed:", e);
+    }
 }
 
 async function saveNoteState(note) {
@@ -1205,4 +1284,120 @@ async function handleEditorChange(content) {
         const cleanedText = preprocessText(content);
         renderPreview(cleanedText);
     }, 300);
+}
+
+// -----------------------------------------------------
+// URL Token Initialization
+// -----------------------------------------------------
+window.currentRole = 'new';
+window.currentToken = null;
+
+const urlParams = new URLSearchParams(window.location.search);
+if (urlParams.has('owner')) {
+    window.currentRole = 'owner';
+    window.currentToken = urlParams.get('owner');
+    document.getElementById('shareBtn').classList.remove('hidden');
+    document.getElementById('pendingEditsBtn').classList.remove('hidden');
+} else if (urlParams.has('suggest')) {
+    window.currentRole = 'suggest';
+    window.currentToken = urlParams.get('suggest');
+} else if (urlParams.has('read')) {
+    window.currentRole = 'read';
+    window.currentToken = urlParams.get('read');
+}
+
+// -----------------------------------------------------
+// Share & Revision Modals
+// -----------------------------------------------------
+window.openShareModal = function() {
+    if (window.currentRole !== 'owner') return;
+    document.getElementById('shareModal').classList.remove('hidden');
+    setTimeout(() => {
+        document.getElementById('shareModal').classList.remove('opacity-0');
+        document.getElementById('shareModalBox').classList.remove('scale-95');
+    }, 10);
+    
+    const baseUrl = window.location.origin + window.location.pathname;
+    
+    fetch(`/api/pastes/owner/${window.currentToken}/tokens`)
+        .then(res => res.json())
+        .then(data => {
+            document.getElementById('readOnlyLinkInput').value = `${baseUrl}?read=${data.readToken}`;
+            document.getElementById('suggestLinkInput').value = `${baseUrl}?suggest=${data.suggestToken}`;
+        }).catch(e => console.error(e));
+}
+
+window.closeShareModal = function() {
+    document.getElementById('shareModal').classList.add('opacity-0');
+    document.getElementById('shareModalBox').classList.add('scale-95');
+    setTimeout(() => document.getElementById('shareModal').classList.add('hidden'), 300);
+}
+
+window.copyToClipboard = function(elementId) {
+    const el = document.getElementById(elementId);
+    el.select();
+    document.execCommand('copy');
+    const btn = el.nextElementSibling;
+    const oldIcon = btn.innerHTML;
+    btn.innerHTML = '<i class="fa-solid fa-check text-green-400"></i>';
+    setTimeout(() => btn.innerHTML = oldIcon, 2000);
+}
+
+window.openPendingEditsModal = function() {
+    if (window.currentRole !== 'owner') return;
+    document.getElementById('pendingEditsModal').classList.remove('hidden');
+    setTimeout(() => {
+        document.getElementById('pendingEditsModal').classList.remove('opacity-0');
+        document.getElementById('pendingEditsBox').classList.remove('scale-95');
+    }, 10);
+    
+    const list = document.getElementById('pendingEditsList');
+    list.innerHTML = '<div class="text-center p-4 text-slate-400">Loading...</div>';
+    
+    fetch(`/api/pastes/owner/${window.currentToken}/revisions`)
+        .then(res => res.json())
+        .then(revs => {
+            list.innerHTML = '';
+            if (revs.length === 0) {
+                list.innerHTML = '<div class="text-center p-4 text-slate-500 text-sm">No pending edits.</div>';
+                return;
+            }
+            revs.forEach(rev => {
+                const btn = document.createElement('button');
+                btn.className = 'w-full text-left p-3 rounded-lg hover:bg-slate-700 transition-colors mb-2 border border-slate-700 bg-slate-800/50';
+                btn.innerHTML = `<div class="text-sm font-semibold text-white">Revision #${rev.id}</div>
+                                 <div class="text-xs text-slate-400 mt-1">${new Date(rev.submittedAt).toLocaleString()}</div>`;
+                btn.onclick = () => previewRevision(rev);
+                list.appendChild(btn);
+            });
+        }).catch(e => {
+            list.innerHTML = '<div class="text-center p-4 text-red-400 text-sm">Failed to load.</div>';
+        });
+}
+
+window.closePendingEditsModal = function() {
+    document.getElementById('pendingEditsModal').classList.add('opacity-0');
+    document.getElementById('pendingEditsBox').classList.add('scale-95');
+    setTimeout(() => document.getElementById('pendingEditsModal').classList.add('hidden'), 300);
+}
+
+window.previewRevision = function(rev) {
+    document.getElementById('pendingEditPreview').innerText = rev.proposedContent;
+    document.getElementById('pendingEditActions').classList.remove('hidden');
+    document.getElementById('approveEditBtn').onclick = () => handleRevision(rev.id, 'APPROVE');
+    document.getElementById('rejectEditBtn').onclick = () => handleRevision(rev.id, 'REJECT');
+}
+
+window.handleRevision = async function(revId, action) {
+    try {
+        await fetch(`/api/pastes/owner/${window.currentToken}/revisions/${revId}?action=${action}`, { method: 'POST' });
+        document.getElementById('pendingEditPreview').innerText = 'Select an edit to preview.';
+        document.getElementById('pendingEditActions').classList.add('hidden');
+        window.openPendingEditsModal();
+        if (action === 'APPROVE') {
+            window.location.reload();
+        }
+    } catch (e) {
+        alert("Failed to process revision.");
+    }
 }
