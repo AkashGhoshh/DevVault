@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Dev Vault Workspace</title>
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230f172a'/%3E%3Crect x='2' y='2' width='28' height='28' rx='5.5' fill='%231e293b'/%3E%3Crect x='6' y='9' width='14' height='2.5' rx='1.25' fill='%2338bdf8'/%3E%3Crect x='6' y='14' width='10' height='2.5' rx='1.25' fill='%2338bdf8' opacity='0.7'/%3E%3Crect x='6' y='19' width='12' height='2.5' rx='1.25' fill='%2338bdf8' opacity='0.5'/%3E%3Ccircle cx='24' cy='22' r='5' fill='%230f172a'/%3E%3Ccircle cx='24' cy='22' r='4' fill='%2338bdf8'/%3E%3Crect x='23' y='19.5' width='2' height='4' rx='1' fill='%230f172a'/%3E%3Crect x='22' y='23' width='4' height='2' rx='1' fill='%230f172a'/%3E%3C/svg%3E">
     <!-- Tailwind CSS (CDN for zero-build setup) -->
     <script src="https://cdn.tailwindcss.com"></script>
     <script>
@@ -31,13 +32,13 @@
     <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
     
     <!-- PDF Export & Syntax Highlighting -->
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js" defer></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/atom-one-dark.min.css">
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js" defer></script>
     
     <!-- Mermaid JS for Diagrams -->
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/mermaid/10.9.0/mermaid.min.js"></script>
-    <script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/mermaid/10.9.0/mermaid.min.js" defer></script>
+    <script defer>
         document.addEventListener('DOMContentLoaded', () => {
             if (window.mermaid) {
                 mermaid.initialize({ startOnLoad: false, theme: 'dark' });
@@ -45,14 +46,27 @@
         });
     </script>
     
+    <!-- Security: DOMPurify for XSS Protection -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.0.6/purify.min.js" defer></script>
+    
     <!-- KaTeX for Math Rendering -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.8/katex.min.css">
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.8/katex.min.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.8/contrib/auto-render.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.8/katex.min.js" defer></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.8/contrib/auto-render.min.js" defer></script>
+    
+    <!-- IndexedDB KeyVal for localfolder persistent handle -->
+    <script src="https://cdn.jsdelivr.net/npm/idb-keyval@6/dist/umd.js" defer></script>
     
     <!-- Google API & Identity Services -->
     <script src="https://accounts.google.com/gsi/client" async defer></script>
     <script src="https://apis.google.com/js/api.js" async defer></script>
+
+    <!-- Prettier Formatter -->
+    <script src="https://unpkg.com/prettier@3.0.3/standalone.js" defer></script>
+    <script src="https://unpkg.com/prettier@3.0.3/plugins/markdown.js" defer></script>
+    <script src="https://unpkg.com/prettier@3.0.3/plugins/estree.js" defer></script>
+    <script src="https://unpkg.com/prettier@3.0.3/plugins/babel.js" defer></script>
+    <script src="https://unpkg.com/prettier@3.0.3/plugins/html.js" defer></script>
 </head>
 <body class="bg-dark-900 text-slate-300 font-sans h-screen flex flex-col overflow-hidden">
 
@@ -71,7 +85,7 @@
             <!-- App Mode Toggle -->
             <div class="flex bg-slate-900 rounded-md border border-slate-700 overflow-hidden p-0.5 shadow-inner">
                 <button id="modeEditBtn" class="px-4 py-1 text-xs font-bold uppercase transition-colors bg-slate-700 text-white rounded shadow-sm" onclick="window.toggleAppMode('edit')">
-                    <i class="fa-solid fa-pen-to-square mr-1"></i> Edit
+                    <i id="editBtnIcon" class="fa-solid fa-pen-to-square mr-1"></i> <span id="editBtnText">Edit</span>
                 </button>
                 <button id="modeReadBtn" class="px-4 py-1 text-xs font-bold uppercase transition-colors text-slate-400 hover:text-slate-200 hover:bg-slate-800 rounded" onclick="window.toggleAppMode('read')">
                     <i class="fa-solid fa-book-open mr-1"></i> Read
@@ -102,10 +116,6 @@
                     <i class="fa-solid fa-gear text-slate-500"></i>
                 </button>
                 
-                <button id="toggleVim" class="w-full text-xs px-3 py-2 rounded bg-slate-800 border border-slate-700 hover:bg-slate-700 transition-colors flex items-center justify-between text-slate-300">
-                    <span class="flex items-center gap-2"><i class="fa-solid fa-keyboard"></i> Vim Mode</span>
-                    <span id="vimStatus" class="text-slate-400 font-bold">OFF</span>
-                </button>
 
                 <div class="relative group w-full">
                     <button id="exportDropdownBtn" class="w-full text-xs px-3 py-2 rounded bg-slate-800 border border-slate-700 hover:bg-slate-700 transition-colors flex items-center justify-between text-slate-300">
@@ -134,7 +144,12 @@
             <div class="text-xs font-mono text-slate-500 bg-black/40 px-4 py-2 border-b border-slate-800 flex justify-between items-center">
                 <span>INPUT // RAW LOGS & NOTES</span>
                 <div class="flex items-center gap-3">
-                    <span id="saveStatus" class="text-green-400"><i class="fa-solid fa-check mr-1"></i>Saved to LocalStorage</span>
+                    <span id="saveStatus" class="flex items-center text-xs font-semibold px-3 py-1.5 rounded-full bg-slate-800 border border-slate-700 text-slate-400">
+                        <i class="fa-solid fa-cloud-arrow-up mr-2"></i> Local Save
+                    </span>
+                    <button id="formatDocBtn" onclick="window.formatDocument()" class="flex items-center text-xs font-bold px-3 py-1.5 rounded-md bg-purple-500/20 text-purple-400 border border-purple-500/50 hover:bg-purple-500/40 hover:text-white transition-colors group">
+                        <i class="fa-solid fa-wand-magic-sparkles mr-2 group-hover:animate-pulse"></i> Format
+                    </button>
                     <button id="shareBtn" class="text-xs px-2 py-1 rounded bg-sky-600 text-white hover:bg-sky-500 transition-colors hidden" onclick="window.openShareModal()">
                         <i class="fa-solid fa-share-nodes"></i> Share
                     </button>
@@ -154,12 +169,18 @@
         <section id="preview-section" class="flex-1 flex flex-col bg-dark-900 relative transition-all duration-300">
             <div class="text-xs font-mono text-slate-500 bg-slate-800/50 px-4 py-2 border-b border-slate-800 flex justify-between items-center backdrop-blur-md">
                 <span>PREVIEW // RENDERED</span>
-                <div class="flex gap-2">
-                    <button id="formatCodeBtn" class="hover:text-white transition-colors" title="Format Document (Ctrl+Shift+F)"><i class="fa-solid fa-wand-magic-sparkles text-sky-400"></i> Auto-Format</button>
+                <div class="flex items-center gap-2">
+                    <span class="text-[11px] text-slate-400 font-semibold mr-1">View Scroll:</span>
+                    <button onclick="window.scrollReadSection('left')" class="flex items-center gap-1 text-xs font-bold px-2.5 py-1 rounded bg-slate-800 border border-slate-700 text-slate-300 hover:bg-slate-700 hover:text-white transition-colors" title="Scroll View Left">
+                        <i class="fa-solid fa-chevron-left text-sky-400"></i> Left
+                    </button>
+                    <button onclick="window.scrollReadSection('right')" class="flex items-center gap-1 text-xs font-bold px-2.5 py-1 rounded bg-slate-800 border border-slate-700 text-slate-300 hover:bg-slate-700 hover:text-white transition-colors" title="Scroll View Right">
+                        Right <i class="fa-solid fa-chevron-right text-sky-400"></i>
+                    </button>
                 </div>
             </div>
             <!-- Rendered content -->
-            <div id="preview-container" class="flex-1 overflow-y-auto p-8 custom-scrollbar markdown-body">
+            <div id="preview-container" class="flex-1 overflow-y-auto overflow-x-auto p-8 custom-scrollbar markdown-body">
                 <div class="text-slate-500 flex flex-col items-center justify-center h-full opacity-50">
                     <i class="fa-solid fa-robot text-4xl mb-4"></i>
                     <p>Paste your AI logs or markdown to begin.</p>

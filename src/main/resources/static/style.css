@@ -46,7 +46,12 @@ body {
 .markdown-body p { margin-bottom: 1em; }
 .markdown-body a { color: #38bdf8; text-decoration: none; }
 .markdown-body a:hover { text-decoration: underline; }
-.markdown-body ul, .markdown-body ol { padding-left: 2em; margin-bottom: 1em; list-style: disc; }
+.markdown-body ul { padding-left: 2em; margin-bottom: 1em; list-style-type: disc; }
+.markdown-body ol { padding-left: 2em; margin-bottom: 1em; list-style-type: decimal; }
+.markdown-body ul ul, .markdown-body ol ul { list-style-type: circle; margin-bottom: 0; }
+.markdown-body ul ul ul, .markdown-body ol ul ul { list-style-type: square; }
+.markdown-body ol ol, .markdown-body ul ol { list-style-type: lower-alpha; margin-bottom: 0; }
+.markdown-body li + li { margin-top: 0.25em; }
 .markdown-body blockquote {
     border-left: 4px solid #38bdf8;
     background: rgba(56, 189, 248, 0.05);

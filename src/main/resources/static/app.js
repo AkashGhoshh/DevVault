@@ -1,5 +1,5 @@
 // Import Core Editor and Markdown Parsing via ESM
-async function setupCodeMirror(isVimMode) {
+async function setupCodeMirror() {
     // Load required modules
     const { EditorState } = await import('https://esm.sh/@codemirror/state');
     const { EditorView, keymap } = await import('https://esm.sh/@codemirror/view');
@@ -7,12 +7,6 @@ async function setupCodeMirror(isVimMode) {
     const { basicSetup } = await import('https://esm.sh/codemirror');
     const { markdown } = await import('https://esm.sh/@codemirror/lang-markdown');
     const { oneDark } = await import('https://esm.sh/@codemirror/theme-one-dark');
-    
-    let vimExtension = [];
-    if (isVimMode) {
-        const { vim } = await import('https://esm.sh/@replit/codemirror-vim');
-        vimExtension = [vim()];
-    }
 
     const activeNote = notes.find(n => n.id === currentNoteId);
     const savedContent = activeNote ? activeNote.content : '';
@@ -30,7 +24,6 @@ async function setupCodeMirror(isVimMode) {
                 basicSetup,
                 markdown(),
                 oneDark,
-                ...vimExtension,
                 keymap.of(defaultKeymap),
                 updateListener,
                 EditorView.theme({
@@ -464,6 +457,15 @@ window.toggleAppMode = function(mode) {
     }
 }
 
+
+// Helper for Horizontal View Scrolling in Read Section
+window.scrollReadSection = function(direction) {
+    const container = document.getElementById('preview-container');
+    if (!container) return;
+    const amount = direction === 'left' ? -350 : 350;
+    container.scrollBy({ left: amount, behavior: 'smooth' });
+};
+
 // Global copy helper for UI feedback
 window.copyToClipboard = function(btn, text) {
     navigator.clipboard.writeText(decodeURIComponent(text)).then(() => {
@@ -730,7 +732,7 @@ function jsonToGrid(obj, keyName = '') {
                 tableHtml += '<tr class="hover:bg-slate-800/50 transition-colors">' + keyArray.map(k => `<td class="border border-slate-700 px-3 py-2 bg-slate-900/50 align-top">${item[k] !== undefined ? jsonToGrid(item[k], k) : ''}</td>`).join('') + '</tr>';
             });
             tableHtml += '</tbody></table>';
-            tableHtml = `<div class="rounded overflow-hidden shadow-md my-1">${tableHtml}</div>`;
+            tableHtml = `<div class="rounded border border-slate-700/80 overflow-x-auto custom-scrollbar my-2 max-w-full bg-slate-900/60 p-1 shadow-md">${tableHtml}</div>`;
         } else {
             tableHtml = `<div class="flex flex-col gap-1 pl-3 border-l-2 border-slate-700">` + 
                    obj.map(item => `<div>${jsonToGrid(item, '')}</div>`).join('') + 
@@ -740,7 +742,7 @@ function jsonToGrid(obj, keyName = '') {
         if (keyName === '') return tableHtml;
         const label = `[+] ${keyName} [${obj.length}]`;
         return `<div>
-            <button class="text-accent font-mono text-sm hover:underline font-bold" onclick="this.nextElementSibling.classList.toggle('hidden'); this.textContent = this.textContent.startsWith('[+]') ? this.textContent.replace('[+]', '[-]') : this.textContent.replace('[-]', '[+]')">${label}</button>
+            <button class="json-toggle-btn text-accent font-mono text-sm hover:underline font-bold">${label}</button>
             <div class="hidden mt-2">${tableHtml}</div>
         </div>`;
     }
@@ -749,7 +751,7 @@ function jsonToGrid(obj, keyName = '') {
         const keys = Object.keys(obj);
         if (keys.length === 0) return '<span class="text-slate-500 font-mono">{}</span>';
         
-        let table = '<table class="w-full text-left border-collapse border border-slate-700">';
+        let table = '<table class="w-full text-left border-collapse border border-slate-700 min-w-max">';
         table += '<tbody>';
         keys.forEach(k => {
             table += `<tr class="hover:bg-slate-800/30 transition-colors">
@@ -758,12 +760,12 @@ function jsonToGrid(obj, keyName = '') {
             </tr>`;
         });
         table += '</tbody></table>';
-        const tableHtml = `<div class="rounded overflow-hidden shadow-md my-1">${table}</div>`;
+        const tableHtml = `<div class="rounded border border-slate-700/80 overflow-x-auto custom-scrollbar my-2 max-w-full bg-slate-900/60 p-1 shadow-md">${table}</div>`;
 
         if (keyName === '') return tableHtml;
         const label = `[+] ${keyName} {}`;
         return `<div>
-            <button class="text-accent font-mono text-sm hover:underline font-bold" onclick="this.nextElementSibling.classList.toggle('hidden'); this.textContent = this.textContent.startsWith('[+]') ? this.textContent.replace('[+]', '[-]') : this.textContent.replace('[-]', '[+]')">${label}</button>
+            <button class="json-toggle-btn text-accent font-mono text-sm hover:underline font-bold">${label}</button>
             <div class="hidden mt-2">${tableHtml}</div>
         </div>`;
     }
@@ -1026,21 +1028,8 @@ window.showDialog = function(message, type = 'alert', title = 'Notice') {
 
 // --- Core Initialization ---
 document.addEventListener('DOMContentLoaded', async () => {
-    // Check global toggle
-    const isVim = localStorage.getItem('vimMode') === 'true';
-    document.getElementById('vimStatus').textContent = isVim ? 'ON' : 'OFF';
-    document.getElementById('vimStatus').className = isVim ? 'text-green-400 font-bold' : 'text-slate-400';
-
     await loadNotes();
-    await setupCodeMirror(isVim);
-
-    // Toggle button event
-    document.getElementById('toggleVim').addEventListener('click', () => {
-        const currentlyVim = localStorage.getItem('vimMode') === 'true';
-        const newVim = !currentlyVim;
-        localStorage.setItem('vimMode', newVim);
-        location.reload(); // Quickest way to re-init extensions
-    });
+    await setupCodeMirror();
 
     // New Note Button event
     const newBtn = document.getElementById('newNoteBtn');
@@ -1401,3 +1390,146 @@ window.handleRevision = async function(revId, action) {
         alert("Failed to process revision.");
     }
 }
+
+window.formatDocument = async function() {
+    if (!window.editor || window.currentRole === 'read') return;
+    
+    try {
+        const btn = document.getElementById('formatDocBtn');
+        if (btn) btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin mr-2"></i> Formatting...';
+
+        let content = window.editor.state.doc.toString();
+        if (!content.trim()) {
+            if (btn) btn.innerHTML = '<i class="fa-solid fa-wand-magic-sparkles mr-2 group-hover:animate-pulse"></i> Format';
+            return;
+        }
+
+        // 1. Smart Cleanup & Wrapper (JSON/Code)
+        content = extractAndWrapRawJSON(content);
+        content = extractAndWrapRawCode(content);
+
+        // 2. Prettier Formatting (Markdown, embedded Code, JSON)
+        if (window.prettier && window.prettierPlugins) {
+            content = await window.prettier.format(content, {
+                parser: 'markdown',
+                plugins: window.prettierPlugins,
+                printWidth: 100,
+                tabWidth: 4,
+                proseWrap: 'preserve'
+            });
+        }
+
+        // 3. Custom Mermaid Mindmap Indentation Fixer
+        // Find ```mermaid ... mindmap ... ``` and auto-indent lines after mindmap
+        content = content.replace(/```mermaid\n([\s\S]*?)```/gi, (match, p1) => {
+            if (p1.trim().toLowerCase().startsWith('mindmap')) {
+                const lines = p1.split('\n');
+                let inMindmap = false;
+                let rootFound = false;
+                
+                for (let i = 0; i < lines.length; i++) {
+                    const line = lines[i];
+                    if (line.trim().toLowerCase() === 'mindmap') {
+                        inMindmap = true;
+                        continue;
+                    }
+                    if (inMindmap && line.trim() !== '') {
+                        if (!rootFound) {
+                            // First element after mindmap is the root
+                            lines[i] = '  ' + line.trim();
+                            rootFound = true;
+                        } else {
+                            // Sub-elements get more indentation
+                            const currentIndent = line.match(/^\s*/)[0].length;
+                            if (currentIndent < 4) {
+                                lines[i] = '    ' + line.trim();
+                            }
+                        }
+                    }
+                }
+                return '```mermaid\n' + lines.join('\n') + '\n```';
+            }
+            return match;
+        });
+
+        // Update Editor
+        window.editor.dispatch({
+            changes: { from: 0, to: window.editor.state.doc.length, insert: content }
+        });
+        
+        if (btn) {
+            btn.innerHTML = '<i class="fa-solid fa-check text-green-400 mr-2"></i> Done!';
+            setTimeout(() => {
+                btn.innerHTML = '<i class="fa-solid fa-wand-magic-sparkles mr-2 group-hover:animate-pulse"></i> Format';
+            }, 2000);
+        }
+    } catch (e) {
+        console.error("Format error:", e);
+        const btn = document.getElementById('formatDocBtn');
+        if (btn) {
+            btn.innerHTML = '<i class="fa-solid fa-triangle-exclamation text-red-400 mr-2"></i> Error';
+            setTimeout(() => {
+                btn.innerHTML = '<i class="fa-solid fa-wand-magic-sparkles mr-2 group-hover:animate-pulse"></i> Format';
+            }, 2000);
+        }
+    }
+}
+
+// Bind Ctrl+Shift+F shortcut for Formatting
+document.addEventListener('keydown', (e) => {
+    if (e.ctrlKey && e.shiftKey && (e.key === 'f' || e.key === 'F')) {
+        e.preventDefault();
+        window.formatDocument();
+    }
+});
+
+// Event Delegation for Read Side (Preview) Interactive Elements
+// This replaces inline onclick handlers which are stripped by DOMPurify
+document.addEventListener('DOMContentLoaded', () => {
+    const previewContainer = document.getElementById('preview-container');
+    if (!previewContainer) return;
+
+    previewContainer.addEventListener('click', (e) => {
+        // 1. JSON Toggle Buttons
+        if (e.target.matches('.json-toggle-btn')) {
+            const btn = e.target;
+            const targetDiv = btn.nextElementSibling;
+            if (targetDiv) {
+                targetDiv.classList.toggle('hidden');
+                btn.textContent = btn.textContent.startsWith('[+]') 
+                    ? btn.textContent.replace('[+]', '[-]') 
+                    : btn.textContent.replace('[-]', '[+]');
+            }
+            return;
+        }
+
+        // 2. Code Block View Toggles (Raw / Preview)
+        if (e.target.matches('.toggle-view-btn')) {
+            const btn = e.target;
+            const rawId = btn.getAttribute('data-raw-id');
+            const prevId = btn.getAttribute('data-prev-id');
+            const mode = btn.getAttribute('data-mode');
+            if (rawId && prevId && mode) {
+                window.toggleBlockView(btn, rawId, prevId, mode);
+            }
+            return;
+        }
+
+        // 3. Copy Code Buttons
+        const copyBtn = e.target.closest('.copy-code-btn');
+        if (copyBtn) {
+            const code = copyBtn.getAttribute('data-code');
+            if (code) {
+                window.copyToClipboard(copyBtn, code);
+            }
+            return;
+        }
+
+        // 4. Think Block Accordions
+        const thinkHeader = e.target.closest('.think-header');
+        if (thinkHeader && thinkHeader.parentElement) {
+            thinkHeader.parentElement.classList.toggle('expanded');
+            return;
+        }
+    });
+});

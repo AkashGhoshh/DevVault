@@ -124,6 +124,9 @@ class StorageManager {
         if (newMode === 'localfolder') {
             try {
                 this.localDirHandle = await window.showDirectoryPicker();
+                if (window.idbKeyval) {
+                    await window.idbKeyval.set('devvault_folder_handle', this.localDirHandle);
+                }
                 // Request persistent permission
                 await this.verifyPermission(this.localDirHandle, true);
             } catch (e) {
@@ -229,8 +232,29 @@ class StorageManager {
     // --- Local Folder Implementation (File System Access API) ---
     async getDirHandle() {
         if (this.localDirHandle) return this.localDirHandle;
+        
+        if (window.idbKeyval) {
+            try {
+                const handle = await window.idbKeyval.get('devvault_folder_handle');
+                if (handle) {
+                    const hasPerm = await this.verifyPermission(handle, true);
+                    if (hasPerm) {
+                        this.localDirHandle = handle;
+                        return handle;
+                    }
+                }
+            } catch (e) {
+                console.error("Failed to restore folder handle from IndexedDB", e);
+            }
+        }
+        
         await window.showDialog("Please re-select your local folder to grant permission.", "alert", "Permission Required");
         this.localDirHandle = await window.showDirectoryPicker();
+        
+        if (window.idbKeyval) {
+            await window.idbKeyval.set('devvault_folder_handle', this.localDirHandle);
+        }
+        
         return this.localDirHandle;
     }
 
