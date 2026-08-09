@@ -466,17 +466,56 @@ window.scrollReadSection = function(direction) {
     container.scrollBy({ left: amount, behavior: 'smooth' });
 };
 
-// Global copy helper for UI feedback
-window.copyToClipboard = function(btn, text) {
-    navigator.clipboard.writeText(decodeURIComponent(text)).then(() => {
-        const originalHtml = btn.innerHTML;
-        btn.innerHTML = '<i class="fa-solid fa-check"></i> Copied!';
-        btn.classList.add('text-green-400', 'border-green-400');
-        setTimeout(() => {
-            btn.innerHTML = originalHtml;
-            btn.classList.remove('text-green-400', 'border-green-400');
-        }, 2000);
-    });
+// Global copy helper supporting both signatures:
+// 1. window.copyToClipboard(elementId) -> Copies input value by ID
+// 2. window.copyToClipboard(btnElement, text) -> Copies direct text
+window.copyToClipboard = function(arg1, arg2) {
+    if (typeof arg1 === 'string') {
+        const el = document.getElementById(arg1);
+        if (el) {
+            el.select();
+            document.execCommand('copy');
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+                navigator.clipboard.writeText(el.value).catch(err => console.error("Clipboard write failed", err));
+            }
+            const btn = el.nextElementSibling;
+            if (btn) {
+                const oldIcon = btn.innerHTML;
+                btn.innerHTML = '<i class="fa-solid fa-check text-green-400"></i>';
+                setTimeout(() => btn.innerHTML = oldIcon, 2000);
+            }
+        }
+    } else if (arg1 && typeof arg2 === 'string') {
+        const textToCopy = decodeURIComponent(arg2);
+        const copyAction = (navigator.clipboard && navigator.clipboard.writeText)
+            ? navigator.clipboard.writeText(textToCopy)
+            : new Promise((resolve, reject) => {
+                const textarea = document.createElement('textarea');
+                textarea.value = textToCopy;
+                textarea.style.position = 'fixed';
+                document.body.appendChild(textarea);
+                textarea.select();
+                try {
+                    document.execCommand('copy');
+                    resolve();
+                } catch (err) {
+                    reject(err);
+                }
+                document.body.removeChild(textarea);
+              });
+
+        copyAction.then(() => {
+            const originalHtml = arg1.innerHTML;
+            arg1.innerHTML = '<i class="fa-solid fa-check"></i> Copied!';
+            arg1.classList.add('text-green-400', 'border-green-400');
+            setTimeout(() => {
+                arg1.innerHTML = originalHtml;
+                arg1.classList.remove('text-green-400', 'border-green-400');
+            }, 2000);
+        }).catch(err => {
+            console.error('Failed to copy text: ', err);
+        });
+    }
 };
 
 // Initialize Markdown-it
@@ -1322,15 +1361,6 @@ window.closeShareModal = function() {
     setTimeout(() => document.getElementById('shareModal').classList.add('hidden'), 300);
 }
 
-window.copyToClipboard = function(elementId) {
-    const el = document.getElementById(elementId);
-    el.select();
-    document.execCommand('copy');
-    const btn = el.nextElementSibling;
-    const oldIcon = btn.innerHTML;
-    btn.innerHTML = '<i class="fa-solid fa-check text-green-400"></i>';
-    setTimeout(() => btn.innerHTML = oldIcon, 2000);
-}
 
 window.openPendingEditsModal = function() {
     if (window.currentRole !== 'owner') return;
