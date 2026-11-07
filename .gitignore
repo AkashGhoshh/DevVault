@@ -1,4 +1,11 @@
-﻿data/
+data/
 .agents/AGENTS.md
 target/
 .vscode/
+.idea
+
+
+.agents
+skills-lock.json
+
+# .agents (Uncomment if you do not want to track skills in git, but keep commented to see in IDE explorer)

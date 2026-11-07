@@ -50,30 +50,21 @@ function generateId() {
 
 async function loadNotes() {
     try {
-        if (window.currentToken) {
-            // Load from backend
-            let endpoint = '';
-            if (window.currentRole === 'owner') endpoint = `/api/pastes/owner/${window.currentToken}`;
-            else if (window.currentRole === 'suggest') endpoint = `/api/pastes/suggest/${window.currentToken}`;
-            else if (window.currentRole === 'read') endpoint = `/api/pastes/read/${window.currentToken}`;
-            
-            const res = await fetch(endpoint);
+        if (window.currentPasteId) {
+            const res = await fetch(`/api/pastes/${window.currentPasteId}`);
             if (res.ok) {
                 const data = await res.json();
                 notes = [{
-                    id: 'cloud_note',
+                    id: data.id,
+                    cloudId: data.id,
                     parentId: null,
-                    title: 'Shared Note',
-                    content: data.content,
+                    title: data.title || 'Untitled Note',
+                    content: data.content || '',
                     updatedAt: Date.now(),
                     isExpanded: true
                 }];
-                // If it's a read-only token, force the UI into read mode
-                if (window.currentRole === 'read') {
-                    window.toggleAppMode('read');
-                }
             } else {
-                alert("Could not load shared note. It may have been deleted.");
+                alert("Could not load note. It may have been deleted.");
                 notes = [{
                     id: generateId(),
                     parentId: null,
@@ -82,36 +73,34 @@ async function loadNotes() {
                     updatedAt: Date.now(),
                     isExpanded: true
                 }];
-                // Remove the invalid token from URL
-                window.history.pushState({}, '', '/');
-                window.currentRole = 'new';
-                window.currentToken = null;
+                window.history.pushState({}, '', window.location.pathname);
+                window.currentPasteId = null;
             }
         } else {
-            // Original LocalStorage logic
             const storedNotes = await window.storageManager.loadNotes();
             if (storedNotes && storedNotes.length > 0) {
                 notes = storedNotes;
-                // Ensure schema backward compatibility for existing notes
-                notes.forEach(n => {
-                    if (n.parentId === undefined) n.parentId = null;
-                    if (n.isExpanded === undefined) n.isExpanded = false;
-                });
             } else {
-                // First time or empty
-                notes.push({
+                notes = [{
                     id: generateId(),
                     parentId: null,
                     title: 'Untitled Note',
                     content: '',
                     updatedAt: Date.now(),
                     isExpanded: true
-                });
+                }];
             }
         }
     } catch (e) {
         console.error("Failed to load notes", e);
-        notes = [];
+        notes = [{
+            id: generateId(),
+            parentId: null,
+            title: 'Untitled Note',
+            content: '',
+            updatedAt: Date.now(),
+            isExpanded: true
+        }];
     }
     
     notes.sort((a, b) => b.updatedAt - a.updatedAt);
@@ -142,34 +131,25 @@ async function saveNoteContent(id, content) {
     renderSidebar(); // Update title in sidebar if changed
 
     // Cloud Sync Logic
-    if (window.currentRole === 'read') return;
-    
     try {
-        if (window.currentRole === 'new') {
+        if (!note.cloudId) {
             const res = await fetch('/api/pastes', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ content })
+                body: JSON.stringify({ title: note.title, content })
             });
             if (res.ok) {
                 const data = await res.json();
-                window.history.pushState({}, '', `?owner=${data.ownerToken}`);
-                window.currentRole = 'owner';
-                window.currentToken = data.ownerToken;
-                document.getElementById('shareBtn').classList.remove('hidden');
-                document.getElementById('pendingEditsBtn').classList.remove('hidden');
+                note.cloudId = data.id;
+                window.currentPasteId = data.id;
+                await window.storageManager.saveNote(note);
+                window.history.pushState({}, '', `?id=${data.id}`);
             }
-        } else if (window.currentRole === 'owner') {
-            await fetch(`/api/pastes/owner/${window.currentToken}`, {
+        } else {
+            await fetch(`/api/pastes/${note.cloudId}`, {
                 method: 'PUT',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ content })
-            });
-        } else if (window.currentRole === 'suggest') {
-            await fetch(`/api/pastes/suggest/${window.currentToken}`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ content })
+                body: JSON.stringify({ title: note.title, content })
             });
         }
         const saveStatus = document.getElementById('saveStatus');
@@ -187,19 +167,70 @@ async function saveNoteState(note) {
     renderSidebar();
 }
 
-// Global exposure for storage manager to reload
-window.reloadAllNotes = async function() {
-    currentNoteId = null;
-    await loadNotes();
-    if (notes.length > 0) {
-        switchNote(notes[0].id);
-    }
-}
+let noteSearchQuery = '';
 
 function renderSidebar() {
     const listEl = document.getElementById('notesList');
     if (!listEl) return;
     listEl.innerHTML = '';
+    
+    // If a search query is entered, render filtered flat list
+    if (noteSearchQuery.trim()) {
+        const q = noteSearchQuery.trim().toLowerCase();
+        const matches = notes.filter(n => 
+            (n.title && n.title.toLowerCase().includes(q)) || 
+            (n.content && n.content.toLowerCase().includes(q))
+        );
+        
+        if (matches.length === 0) {
+            const emptyEl = document.createElement('div');
+            emptyEl.className = 'p-4 text-center text-xs text-slate-500';
+            emptyEl.innerHTML = '<i class="fa-solid fa-magnifying-glass mb-2 block text-sm opacity-40"></i>No matching notes';
+            listEl.appendChild(emptyEl);
+            return;
+        }
+        
+        matches.forEach(note => {
+            const isActive = note.id === currentNoteId;
+            const itemContainer = document.createElement('div');
+            itemContainer.className = 'flex flex-col';
+            
+            const item = document.createElement('div');
+            item.className = `group flex items-center justify-between px-2.5 py-2 rounded-md cursor-pointer transition-colors text-sm ${isActive ? 'bg-slate-800 text-white font-medium' : 'text-slate-400 hover:bg-slate-800/50 hover:text-slate-200'}`;
+            
+            const leftDiv = document.createElement('div');
+            leftDiv.className = 'flex items-center gap-2 overflow-hidden flex-1';
+            
+            const icon = document.createElement('i');
+            icon.className = 'fa-regular fa-file-lines text-xs text-slate-500';
+            
+            const titleSpan = document.createElement('span');
+            titleSpan.className = 'truncate max-w-[140px] flex-1';
+            titleSpan.textContent = note.title;
+            
+            leftDiv.appendChild(icon);
+            leftDiv.appendChild(titleSpan);
+            item.onclick = () => switchNote(note.id);
+            
+            const actionsDiv = document.createElement('div');
+            actionsDiv.className = `flex gap-1 ${isActive ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'} transition-opacity items-center`;
+            
+            const delBtn = document.createElement('i');
+            delBtn.className = 'fa-solid fa-trash text-[10px] text-slate-500 hover:text-red-400 p-1';
+            delBtn.title = "Delete";
+            delBtn.onclick = (e) => {
+                e.stopPropagation();
+                deleteNote(note.id);
+            };
+            actionsDiv.appendChild(delBtn);
+            
+            item.appendChild(leftDiv);
+            item.appendChild(actionsDiv);
+            itemContainer.appendChild(item);
+            listEl.appendChild(itemContainer);
+        });
+        return;
+    }
     
     function renderTree(parentId, containerEl, level) {
         const children = notes.filter(n => n.parentId === parentId);
@@ -458,64 +489,39 @@ window.toggleAppMode = function(mode) {
 }
 
 
-// Helper for Horizontal View Scrolling in Read Section
-window.scrollReadSection = function(direction) {
-    const container = document.getElementById('preview-container');
-    if (!container) return;
-    const amount = direction === 'left' ? -350 : 350;
-    container.scrollBy({ left: amount, behavior: 'smooth' });
-};
 
-// Global copy helper supporting both signatures:
-// 1. window.copyToClipboard(elementId) -> Copies input value by ID
-// 2. window.copyToClipboard(btnElement, text) -> Copies direct text
-window.copyToClipboard = function(arg1, arg2) {
-    if (typeof arg1 === 'string') {
-        const el = document.getElementById(arg1);
-        if (el) {
-            el.select();
-            document.execCommand('copy');
-            if (navigator.clipboard && navigator.clipboard.writeText) {
-                navigator.clipboard.writeText(el.value).catch(err => console.error("Clipboard write failed", err));
+// Copy helper for rendered code blocks
+window.copyToClipboard = function(btnElement, text) {
+    if (!btnElement || typeof text !== 'string') return;
+    const textToCopy = decodeURIComponent(text);
+    const copyAction = (navigator.clipboard && navigator.clipboard.writeText)
+        ? navigator.clipboard.writeText(textToCopy)
+        : new Promise((resolve, reject) => {
+            const textarea = document.createElement('textarea');
+            textarea.value = textToCopy;
+            textarea.style.position = 'fixed';
+            document.body.appendChild(textarea);
+            textarea.select();
+            try {
+                document.execCommand('copy');
+                resolve();
+            } catch (err) {
+                reject(err);
             }
-            const btn = el.nextElementSibling;
-            if (btn) {
-                const oldIcon = btn.innerHTML;
-                btn.innerHTML = '<i class="fa-solid fa-check text-green-400"></i>';
-                setTimeout(() => btn.innerHTML = oldIcon, 2000);
-            }
-        }
-    } else if (arg1 && typeof arg2 === 'string') {
-        const textToCopy = decodeURIComponent(arg2);
-        const copyAction = (navigator.clipboard && navigator.clipboard.writeText)
-            ? navigator.clipboard.writeText(textToCopy)
-            : new Promise((resolve, reject) => {
-                const textarea = document.createElement('textarea');
-                textarea.value = textToCopy;
-                textarea.style.position = 'fixed';
-                document.body.appendChild(textarea);
-                textarea.select();
-                try {
-                    document.execCommand('copy');
-                    resolve();
-                } catch (err) {
-                    reject(err);
-                }
-                document.body.removeChild(textarea);
-              });
+            document.body.removeChild(textarea);
+          });
 
-        copyAction.then(() => {
-            const originalHtml = arg1.innerHTML;
-            arg1.innerHTML = '<i class="fa-solid fa-check"></i> Copied!';
-            arg1.classList.add('text-green-400', 'border-green-400');
-            setTimeout(() => {
-                arg1.innerHTML = originalHtml;
-                arg1.classList.remove('text-green-400', 'border-green-400');
-            }, 2000);
-        }).catch(err => {
-            console.error('Failed to copy text: ', err);
-        });
-    }
+    copyAction.then(() => {
+        const originalHtml = btnElement.innerHTML;
+        btnElement.innerHTML = '<i class="fa-solid fa-check"></i> Copied!';
+        btnElement.classList.add('text-green-400', 'border-green-400');
+        setTimeout(() => {
+            btnElement.innerHTML = originalHtml;
+            btnElement.classList.remove('text-green-400', 'border-green-400');
+        }, 2000);
+    }).catch(err => {
+        console.error('Failed to copy text: ', err);
+    });
 };
 
 // Initialize Markdown-it
@@ -742,76 +748,6 @@ ${md.render(p1)}
     return cleaned;
 }
 
-function jsonToGrid(obj, keyName = '') {
-    if (obj === null) return '<span class="text-slate-500 italic">null</span>';
-    if (typeof obj === 'boolean') return `<span class="text-purple-400 font-mono">${obj}</span>`;
-    if (typeof obj === 'number') return `<span class="text-orange-400 font-mono">${obj}</span>`;
-    if (typeof obj === 'string') {
-        const isUrl = obj.startsWith('http://') || obj.startsWith('https://');
-        const escaped = md.utils.escapeHtml(obj);
-        if (isUrl) return `<a href="${escaped}" target="_blank" class="text-accent underline hover:text-sky-300">"${escaped}"</a>`;
-        return `<span class="text-green-400 break-words">"${escaped}"</span>`;
-    }
-
-    if (Array.isArray(obj)) {
-        if (obj.length === 0) return '<span class="text-slate-500 font-mono">[]</span>';
-        
-        let tableHtml = '';
-        const isArrayOfObjects = obj.every(item => typeof item === 'object' && item !== null && !Array.isArray(item));
-        
-        if (isArrayOfObjects) {
-            const keys = new Set();
-            obj.forEach(item => Object.keys(item).forEach(k => keys.add(k)));
-            const keyArray = Array.from(keys);
-            
-            tableHtml += '<table class="w-full text-left border-collapse border border-slate-700 min-w-max">';
-            tableHtml += '<thead><tr>' + keyArray.map(k => `<th class="border border-slate-700 bg-slate-800 px-3 py-2 text-xs font-bold text-slate-300 uppercase tracking-wider">${k}</th>`).join('') + '</tr></thead>';
-            tableHtml += '<tbody>';
-            obj.forEach(item => {
-                tableHtml += '<tr class="hover:bg-slate-800/50 transition-colors">' + keyArray.map(k => `<td class="border border-slate-700 px-3 py-2 bg-slate-900/50 align-top">${item[k] !== undefined ? jsonToGrid(item[k], k) : ''}</td>`).join('') + '</tr>';
-            });
-            tableHtml += '</tbody></table>';
-            tableHtml = `<div class="rounded border border-slate-700/80 overflow-x-auto custom-scrollbar my-2 max-w-full bg-slate-900/60 p-1 shadow-md">${tableHtml}</div>`;
-        } else {
-            tableHtml = `<div class="flex flex-col gap-1 pl-3 border-l-2 border-slate-700">` + 
-                   obj.map(item => `<div>${jsonToGrid(item, '')}</div>`).join('') + 
-                   `</div>`;
-        }
-
-        if (keyName === '') return tableHtml;
-        const label = `[+] ${keyName} [${obj.length}]`;
-        return `<div>
-            <button class="json-toggle-btn text-accent font-mono text-sm hover:underline font-bold">${label}</button>
-            <div class="hidden mt-2">${tableHtml}</div>
-        </div>`;
-    }
-
-    if (typeof obj === 'object') {
-        const keys = Object.keys(obj);
-        if (keys.length === 0) return '<span class="text-slate-500 font-mono">{}</span>';
-        
-        let table = '<table class="w-full text-left border-collapse border border-slate-700 min-w-max">';
-        table += '<tbody>';
-        keys.forEach(k => {
-            table += `<tr class="hover:bg-slate-800/30 transition-colors">
-                <td class="border border-slate-700 bg-slate-800/80 px-3 py-2 text-xs font-semibold text-slate-300 w-1/4 align-top whitespace-nowrap">${k}</td>
-                <td class="border border-slate-700 px-3 py-2 bg-slate-900/50 align-top break-all">${jsonToGrid(obj[k], k)}</td>
-            </tr>`;
-        });
-        table += '</tbody></table>';
-        const tableHtml = `<div class="rounded border border-slate-700/80 overflow-x-auto custom-scrollbar my-2 max-w-full bg-slate-900/60 p-1 shadow-md">${table}</div>`;
-
-        if (keyName === '') return tableHtml;
-        const label = `[+] ${keyName} {}`;
-        return `<div>
-            <button class="json-toggle-btn text-accent font-mono text-sm hover:underline font-bold">${label}</button>
-            <div class="hidden mt-2">${tableHtml}</div>
-        </div>`;
-    }
-
-    return String(obj);
-}
-
 async function renderPreview(rawContent) {
     const previewContainer = document.getElementById('preview-container');
     
@@ -877,13 +813,6 @@ async function renderPreview(rawContent) {
             // Clean up nested backticks if ChatGPT double-wrapped it
             let cleanMermaid = code.replace(/```mermaid\s*/ig, '').replace(/```\s*$/g, '').trim();
             previewHtml = `<div class="mermaid-container p-4 flex justify-center"><pre class="mermaid">${md.utils.escapeHtml(cleanMermaid)}</pre></div>`;
-        } else if (info === 'json') {
-            try {
-                const parsedJson = JSON.parse(code);
-                hasPreview = true;
-                defaultMode = 'preview';
-                previewHtml = `<div class="p-4">${jsonToGrid(parsedJson)}</div>`;
-            } catch (e) { hasPreview = false; }
         } else if (info === 'markdown' || info === 'md') {
             hasPreview = true;
             defaultMode = 'raw';
@@ -897,8 +826,8 @@ async function renderPreview(rawContent) {
             const isRaw = defaultMode === 'raw';
             toggleHtml = `
             <div class="flex bg-slate-900 rounded border border-slate-700 overflow-hidden opacity-0 group-hover:opacity-100 transition-all duration-200">
-                <button class="prev-btn px-3 py-1 text-[11px] font-bold uppercase transition-colors ${isRaw ? 'text-slate-400 hover:text-slate-200 hover:bg-slate-800' : 'bg-slate-700 text-white'}" onclick="window.toggleBlockView(this, '${rawId}', '${prevId}', 'preview')">Preview</button>
-                <button class="raw-btn px-3 py-1 text-[11px] font-bold uppercase transition-colors ${!isRaw ? 'text-slate-400 hover:text-slate-200 hover:bg-slate-800' : 'bg-slate-700 text-white'}" onclick="window.toggleBlockView(this, '${rawId}', '${prevId}', 'raw')">Raw</button>
+                <button class="toggle-view-btn prev-btn px-3 py-1 text-[11px] font-bold uppercase transition-colors ${isRaw ? 'text-slate-400 hover:text-slate-200 hover:bg-slate-800' : 'bg-slate-700 text-white'}" data-raw-id="${rawId}" data-prev-id="${prevId}" data-mode="preview">Preview</button>
+                <button class="toggle-view-btn raw-btn px-3 py-1 text-[11px] font-bold uppercase transition-colors ${!isRaw ? 'text-slate-400 hover:text-slate-200 hover:bg-slate-800' : 'bg-slate-700 text-white'}" data-raw-id="${rawId}" data-prev-id="${prevId}" data-mode="raw">Raw</button>
             </div>
             `;
         }
@@ -910,7 +839,7 @@ async function renderPreview(rawContent) {
                 <span class="font-bold tracking-widest uppercase flex items-center text-accent"><i class="fa-solid fa-code mr-2"></i> ${info || 'CODE'}</span>
                 <div class="flex items-center gap-3">
                     ${toggleHtml}
-                    <button class="hover:text-white transition-all duration-200 bg-slate-700/50 hover:bg-slate-700 px-2 py-1 rounded border border-slate-600 opacity-0 group-hover:opacity-100 flex items-center gap-1" title="Copy Code" onclick="window.copyToClipboard(this, '${encodedStandardCode}')">
+                    <button class="copy-code-btn hover:text-white transition-all duration-200 bg-slate-700/50 hover:bg-slate-700 px-2 py-1 rounded border border-slate-600 opacity-0 group-hover:opacity-100 flex items-center gap-1" title="Copy Code" data-code="${encodedStandardCode}">
                         <i class="fa-solid fa-copy text-[10px]"></i> Copy
                     </button>
                 </div>
@@ -924,8 +853,16 @@ async function renderPreview(rawContent) {
         </div>`;
     };
 
-    // 3. Render HTML
-    previewContainer.innerHTML = md.render(processed);
+    // 3. Render HTML with DOMPurify XSS Sanitization
+    const rawHtml = md.render(processed);
+    if (window.DOMPurify) {
+        previewContainer.innerHTML = DOMPurify.sanitize(rawHtml, {
+            ADD_TAGS: ['use'],
+            ADD_ATTR: ['target', 'data-raw-id', 'data-prev-id', 'data-mode', 'data-code']
+        });
+    } else {
+        previewContainer.innerHTML = rawHtml;
+    }
 
     // 4. Render Math Equations (KaTeX)
     if (window.renderMathInElement) {
@@ -1078,66 +1015,33 @@ document.addEventListener('DOMContentLoaded', async () => {
         });
     }
 
-    // Export helper function
-    function downloadFile(filename, content, type) {
-        const blob = new Blob([content], { type: type });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = filename;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        URL.revokeObjectURL(url);
-    }
-
-    function getExportTitle() {
-        if (!window.currentNote) return 'devvault_export';
-        return window.currentNote.title.replace(/[^a-z0-9]/gi, '_').toLowerCase() || 'devvault_export';
-    }
-
-    // Export PDF Button event
-    const exportPdfBtn = document.getElementById('exportPdfBtn');
-    if (exportPdfBtn) {
-        exportPdfBtn.addEventListener('click', () => {
-            const previewContainer = document.getElementById('preview-container');
-            const opt = {
-                margin:       10,
-                filename:     `${getExportTitle()}.pdf`,
-                image:        { type: 'jpeg', quality: 0.98 },
-                html2canvas:  { scale: 2, useCORS: true, backgroundColor: '#0f172a' },
-                jsPDF:        { unit: 'mm', format: 'a4', orientation: 'portrait' }
-            };
-            html2pdf().set(opt).from(previewContainer).save();
+    // Note Search Input event
+    const searchInput = document.getElementById('noteSearchInput');
+    const clearSearchBtn = document.getElementById('clearSearchBtn');
+    if (searchInput) {
+        searchInput.addEventListener('input', (e) => {
+            noteSearchQuery = e.target.value;
+            if (clearSearchBtn) {
+                if (noteSearchQuery.length > 0) {
+                    clearSearchBtn.classList.remove('hidden');
+                } else {
+                    clearSearchBtn.classList.add('hidden');
+                }
+            }
+            renderSidebar();
         });
     }
 
-    // Export DOC Button event
-    const exportDocBtn = document.getElementById('exportDocBtn');
-    if (exportDocBtn) {
-        exportDocBtn.addEventListener('click', () => {
-            if (!window.currentNote) return;
-            const previewHtml = document.getElementById('preview-container').innerHTML;
-            const htmlContent = `
-                <html xmlns:o='urn:schemas-microsoft-com:office:office' xmlns:w='urn:schemas-microsoft-com:office:word' xmlns='http://www.w3.org/TR/REC-html40'>
-                <head><meta charset='utf-8'><title>${window.currentNote.title}</title></head>
-                <body>${previewHtml}</body>
-                </html>
-            `;
-            downloadFile(`${getExportTitle()}.doc`, htmlContent, 'application/msword');
+    if (clearSearchBtn && searchInput) {
+        clearSearchBtn.addEventListener('click', () => {
+            searchInput.value = '';
+            noteSearchQuery = '';
+            clearSearchBtn.classList.add('hidden');
+            renderSidebar();
+            searchInput.focus();
         });
     }
 
-    // Export TXT Button event
-    const exportTxtBtn = document.getElementById('exportTxtBtn');
-    if (exportTxtBtn) {
-        exportTxtBtn.addEventListener('click', () => {
-            if (!window.currentNote) return;
-            // Provide raw text format (markdown is very readable as raw text)
-            downloadFile(`${getExportTitle()}.txt`, window.currentNote.content, 'text/plain');
-        });
-    }
-    
     // Setup Diagram Modal Close Button
     const closeDiagramBtn = document.getElementById('closeDiagramBtn');
     if (closeDiagramBtn) {
@@ -1221,57 +1125,6 @@ document.addEventListener('DOMContentLoaded', async () => {
         });
     }
 
-    // 3. Prettier Auto-Format (Lazy Loaded)
-    const formatCodeBtn = document.getElementById('formatCodeBtn');
-    if (formatCodeBtn) {
-        formatCodeBtn.addEventListener('click', async () => {
-            if (!window.editor) return;
-            
-            // Change button state
-            const originalHtml = formatCodeBtn.innerHTML;
-            formatCodeBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin text-sky-400"></i> Formatting...';
-            
-            try {
-                // Dynamically import Prettier standalone and plugins from CDN
-                if (!window.prettier) {
-                    await import('https://unpkg.com/prettier@3.0.3/standalone.js');
-                    await import('https://unpkg.com/prettier@3.0.3/plugins/markdown.js');
-                    await import('https://unpkg.com/prettier@3.0.3/plugins/html.js');
-                    await import('https://unpkg.com/prettier@3.0.3/plugins/estree.js');
-                    await import('https://unpkg.com/prettier@3.0.3/plugins/babel.js');
-                    await import('https://unpkg.com/prettier@3.0.3/plugins/postcss.js');
-                    await import('https://unpkg.com/prettier@3.0.3/plugins/yaml.js');
-                }
-                
-                const currentContent = window.editor.state.doc.toString();
-                
-                // Format using Prettier (Markdown parser automatically formats inner code blocks too)
-                const formatted = await prettier.format(currentContent, {
-                    parser: "markdown",
-                    plugins: prettierPlugins
-                });
-                
-                // Update editor content
-                window.editor.dispatch({
-                    changes: { from: 0, to: window.editor.state.doc.length, insert: formatted }
-                });
-                
-            } catch (err) {
-                console.error("Formatting failed:", err);
-                await window.showDialog("Formatting failed. Check console for details.", "alert", "Error");
-            } finally {
-                formatCodeBtn.innerHTML = originalHtml;
-            }
-        });
-    }
-    
-    // Add Ctrl+Shift+F shortcut for formatting
-    document.addEventListener('keydown', (e) => {
-        if (e.ctrlKey && e.shiftKey && (e.key === 'f' || e.key === 'F')) {
-            e.preventDefault();
-            if (formatCodeBtn) formatCodeBtn.click();
-        }
-    });
 
 });
 
@@ -1283,6 +1136,50 @@ window.addEventListener('beforeunload', (e) => {
     if (hasUnsavedChanges) {
         e.preventDefault();
         e.returnValue = 'You have unsaved changes. Are you sure you want to leave?';
+    }
+});
+
+// --- Keyboard Shortcuts ---
+document.addEventListener('keydown', async (e) => {
+    // Ctrl+S / Cmd+S: Save current note immediately
+    if ((e.ctrlKey || e.metaKey) && (e.key === 's' || e.key === 'S')) {
+        e.preventDefault();
+        if (currentNoteId && window.editor) {
+            clearTimeout(saveTimeout);
+            const content = window.editor.state.doc.toString();
+            await saveNoteContent(currentNoteId, content);
+            hasUnsavedChanges = false;
+            const saveStatus = document.getElementById('saveStatus');
+            if (saveStatus) {
+                saveStatus.innerHTML = '<i class="fa-solid fa-check text-green-400 mr-1.5"></i>Saved!';
+                setTimeout(() => {
+                    saveStatus.innerHTML = '<i class="fa-solid fa-cloud-arrow-up mr-2"></i> Local Save';
+                }, 1500);
+            }
+        }
+    }
+
+    // Alt+N / Ctrl+Alt+N: Create new note
+    if (e.altKey && (e.key === 'n' || e.key === 'N')) {
+        e.preventDefault();
+        window.createNewNote();
+    }
+
+    // Escape: Close modal or clear search
+    if (e.key === 'Escape') {
+        const diagramModal = document.getElementById('diagramModal');
+        if (diagramModal && !diagramModal.classList.contains('hidden')) {
+            diagramModal.classList.add('opacity-0');
+            setTimeout(() => diagramModal.classList.add('hidden'), 300);
+        }
+        const searchInput = document.getElementById('noteSearchInput');
+        if (searchInput && document.activeElement === searchInput) {
+            searchInput.value = '';
+            noteSearchQuery = '';
+            document.getElementById('clearSearchBtn')?.classList.add('hidden');
+            renderSidebar();
+            searchInput.blur();
+        }
     }
 });
 
@@ -1315,203 +1212,10 @@ async function handleEditorChange(content) {
 }
 
 // -----------------------------------------------------
-// URL Token Initialization
+// URL Initialization
 // -----------------------------------------------------
-window.currentRole = 'new';
-window.currentToken = null;
-
 const urlParams = new URLSearchParams(window.location.search);
-if (urlParams.has('owner')) {
-    window.currentRole = 'owner';
-    window.currentToken = urlParams.get('owner');
-    document.getElementById('shareBtn').classList.remove('hidden');
-    document.getElementById('pendingEditsBtn').classList.remove('hidden');
-} else if (urlParams.has('suggest')) {
-    window.currentRole = 'suggest';
-    window.currentToken = urlParams.get('suggest');
-} else if (urlParams.has('read')) {
-    window.currentRole = 'read';
-    window.currentToken = urlParams.get('read');
-}
-
-// -----------------------------------------------------
-// Share & Revision Modals
-// -----------------------------------------------------
-window.openShareModal = function() {
-    if (window.currentRole !== 'owner') return;
-    document.getElementById('shareModal').classList.remove('hidden');
-    setTimeout(() => {
-        document.getElementById('shareModal').classList.remove('opacity-0');
-        document.getElementById('shareModalBox').classList.remove('scale-95');
-    }, 10);
-    
-    const baseUrl = window.location.origin + window.location.pathname;
-    
-    fetch(`/api/pastes/owner/${window.currentToken}/tokens`)
-        .then(res => res.json())
-        .then(data => {
-            document.getElementById('readOnlyLinkInput').value = `${baseUrl}?read=${data.readToken}`;
-            document.getElementById('suggestLinkInput').value = `${baseUrl}?suggest=${data.suggestToken}`;
-        }).catch(e => console.error(e));
-}
-
-window.closeShareModal = function() {
-    document.getElementById('shareModal').classList.add('opacity-0');
-    document.getElementById('shareModalBox').classList.add('scale-95');
-    setTimeout(() => document.getElementById('shareModal').classList.add('hidden'), 300);
-}
-
-
-window.openPendingEditsModal = function() {
-    if (window.currentRole !== 'owner') return;
-    document.getElementById('pendingEditsModal').classList.remove('hidden');
-    setTimeout(() => {
-        document.getElementById('pendingEditsModal').classList.remove('opacity-0');
-        document.getElementById('pendingEditsBox').classList.remove('scale-95');
-    }, 10);
-    
-    const list = document.getElementById('pendingEditsList');
-    list.innerHTML = '<div class="text-center p-4 text-slate-400">Loading...</div>';
-    
-    fetch(`/api/pastes/owner/${window.currentToken}/revisions`)
-        .then(res => res.json())
-        .then(revs => {
-            list.innerHTML = '';
-            if (revs.length === 0) {
-                list.innerHTML = '<div class="text-center p-4 text-slate-500 text-sm">No pending edits.</div>';
-                return;
-            }
-            revs.forEach(rev => {
-                const btn = document.createElement('button');
-                btn.className = 'w-full text-left p-3 rounded-lg hover:bg-slate-700 transition-colors mb-2 border border-slate-700 bg-slate-800/50';
-                btn.innerHTML = `<div class="text-sm font-semibold text-white">Revision #${rev.id}</div>
-                                 <div class="text-xs text-slate-400 mt-1">${new Date(rev.submittedAt).toLocaleString()}</div>`;
-                btn.onclick = () => previewRevision(rev);
-                list.appendChild(btn);
-            });
-        }).catch(e => {
-            list.innerHTML = '<div class="text-center p-4 text-red-400 text-sm">Failed to load.</div>';
-        });
-}
-
-window.closePendingEditsModal = function() {
-    document.getElementById('pendingEditsModal').classList.add('opacity-0');
-    document.getElementById('pendingEditsBox').classList.add('scale-95');
-    setTimeout(() => document.getElementById('pendingEditsModal').classList.add('hidden'), 300);
-}
-
-window.previewRevision = function(rev) {
-    document.getElementById('pendingEditPreview').innerText = rev.proposedContent;
-    document.getElementById('pendingEditActions').classList.remove('hidden');
-    document.getElementById('approveEditBtn').onclick = () => handleRevision(rev.id, 'APPROVE');
-    document.getElementById('rejectEditBtn').onclick = () => handleRevision(rev.id, 'REJECT');
-}
-
-window.handleRevision = async function(revId, action) {
-    try {
-        await fetch(`/api/pastes/owner/${window.currentToken}/revisions/${revId}?action=${action}`, { method: 'POST' });
-        document.getElementById('pendingEditPreview').innerText = 'Select an edit to preview.';
-        document.getElementById('pendingEditActions').classList.add('hidden');
-        window.openPendingEditsModal();
-        if (action === 'APPROVE') {
-            window.location.reload();
-        }
-    } catch (e) {
-        alert("Failed to process revision.");
-    }
-}
-
-window.formatDocument = async function() {
-    if (!window.editor || window.currentRole === 'read') return;
-    
-    try {
-        const btn = document.getElementById('formatDocBtn');
-        if (btn) btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin mr-2"></i> Formatting...';
-
-        let content = window.editor.state.doc.toString();
-        if (!content.trim()) {
-            if (btn) btn.innerHTML = '<i class="fa-solid fa-wand-magic-sparkles mr-2 group-hover:animate-pulse"></i> Format';
-            return;
-        }
-
-        // 1. Smart Cleanup & Wrapper (JSON/Code)
-        content = extractAndWrapRawJSON(content);
-        content = extractAndWrapRawCode(content);
-
-        // 2. Prettier Formatting (Markdown, embedded Code, JSON)
-        if (window.prettier && window.prettierPlugins) {
-            content = await window.prettier.format(content, {
-                parser: 'markdown',
-                plugins: window.prettierPlugins,
-                printWidth: 100,
-                tabWidth: 4,
-                proseWrap: 'preserve'
-            });
-        }
-
-        // 3. Custom Mermaid Mindmap Indentation Fixer
-        // Find ```mermaid ... mindmap ... ``` and auto-indent lines after mindmap
-        content = content.replace(/```mermaid\n([\s\S]*?)```/gi, (match, p1) => {
-            if (p1.trim().toLowerCase().startsWith('mindmap')) {
-                const lines = p1.split('\n');
-                let inMindmap = false;
-                let rootFound = false;
-                
-                for (let i = 0; i < lines.length; i++) {
-                    const line = lines[i];
-                    if (line.trim().toLowerCase() === 'mindmap') {
-                        inMindmap = true;
-                        continue;
-                    }
-                    if (inMindmap && line.trim() !== '') {
-                        if (!rootFound) {
-                            // First element after mindmap is the root
-                            lines[i] = '  ' + line.trim();
-                            rootFound = true;
-                        } else {
-                            // Sub-elements get more indentation
-                            const currentIndent = line.match(/^\s*/)[0].length;
-                            if (currentIndent < 4) {
-                                lines[i] = '    ' + line.trim();
-                            }
-                        }
-                    }
-                }
-                return '```mermaid\n' + lines.join('\n') + '\n```';
-            }
-            return match;
-        });
-
-        // Update Editor
-        window.editor.dispatch({
-            changes: { from: 0, to: window.editor.state.doc.length, insert: content }
-        });
-        
-        if (btn) {
-            btn.innerHTML = '<i class="fa-solid fa-check text-green-400 mr-2"></i> Done!';
-            setTimeout(() => {
-                btn.innerHTML = '<i class="fa-solid fa-wand-magic-sparkles mr-2 group-hover:animate-pulse"></i> Format';
-            }, 2000);
-        }
-    } catch (e) {
-        console.error("Format error:", e);
-        const btn = document.getElementById('formatDocBtn');
-        if (btn) {
-            btn.innerHTML = '<i class="fa-solid fa-triangle-exclamation text-red-400 mr-2"></i> Error';
-            setTimeout(() => {
-                btn.innerHTML = '<i class="fa-solid fa-wand-magic-sparkles mr-2 group-hover:animate-pulse"></i> Format';
-            }, 2000);
-        }
-    }
-}
-
-// Bind Ctrl+Shift+F shortcut for Formatting
-document.addEventListener('keydown', (e) => {
-    if (e.ctrlKey && e.shiftKey && (e.key === 'f' || e.key === 'F')) {
-        e.preventDefault();
-        window.formatDocument();
-    }
-});
+window.currentPasteId = urlParams.get('id') || null;
 
 // Event Delegation for Read Side (Preview) Interactive Elements
 // This replaces inline onclick handlers which are stripped by DOMPurify
