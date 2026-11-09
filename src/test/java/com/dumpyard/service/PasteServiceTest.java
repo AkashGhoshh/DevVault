@@ -38,6 +38,9 @@ class PasteServiceTest {
         paste.setId(1L);
         paste.setTitle("Sample Note");
         paste.setContent("Hello World");
+        paste.setTags("architecture,api");
+        paste.setIsPinned(true);
+        paste.setFolder("Architecture");
         paste.setCreatedAt(LocalDateTime.now());
         paste.setUpdatedAt(LocalDateTime.now());
     }
@@ -108,5 +111,28 @@ class PasteServiceTest {
         when(pasteRepository.existsById(999L)).thenReturn(false);
 
         assertThrows(PasteNotFoundException.class, () -> pasteService.deletePaste(999L));
+    }
+
+    @Test
+    void testCreatePaste_WithTagsAndPin() {
+        when(pasteRepository.save(any(Paste.class))).thenReturn(paste);
+
+        PasteResponse response = pasteService.createPaste(new CreatePasteRequest("Sample Note", "Hello World", "architecture,api", true, "Architecture"));
+
+        assertNotNull(response);
+        assertEquals("architecture,api", response.tags());
+        assertTrue(response.isPinned());
+        assertEquals("Architecture", response.folder());
+    }
+
+    @Test
+    void testUpdatePaste_WithTagsAndPin() {
+        when(pasteRepository.findById(1L)).thenReturn(Optional.of(paste));
+        when(pasteRepository.save(any(Paste.class))).thenReturn(paste);
+
+        PasteResponse response = pasteService.updatePaste(1L, new UpdatePasteRequest("Updated Title", "New Content", "backend", false, "Backend"));
+
+        assertNotNull(response);
+        verify(pasteRepository, times(1)).save(paste);
     }
 }

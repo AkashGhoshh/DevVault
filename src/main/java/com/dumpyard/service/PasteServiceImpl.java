@@ -28,6 +28,9 @@ public class PasteServiceImpl implements PasteService {
         Paste paste = new Paste();
         paste.setTitle(request.title() != null && !request.title().isBlank() ? request.title() : "Untitled Note");
         paste.setContent(request.content());
+        paste.setTags(request.tags() != null ? request.tags() : "");
+        paste.setIsPinned(request.isPinned() != null ? request.isPinned() : false);
+        paste.setFolder(request.folder() != null && !request.folder().isBlank() ? request.folder() : "General");
         paste.setCreatedAt(LocalDateTime.now());
         paste.setUpdatedAt(LocalDateTime.now());
 
@@ -60,6 +63,15 @@ public class PasteServiceImpl implements PasteService {
             paste.setTitle(request.title());
         }
         paste.setContent(request.content());
+        if (request.tags() != null) {
+            paste.setTags(request.tags());
+        }
+        if (request.isPinned() != null) {
+            paste.setIsPinned(request.isPinned());
+        }
+        if (request.folder() != null && !request.folder().isBlank()) {
+            paste.setFolder(request.folder());
+        }
         paste.setUpdatedAt(LocalDateTime.now());
 
         Paste updated = pasteRepository.save(paste);
@@ -80,6 +92,9 @@ public class PasteServiceImpl implements PasteService {
                 paste.getId(),
                 paste.getTitle(),
                 paste.getContent(),
+                paste.getTags() != null ? paste.getTags() : "",
+                paste.getIsPinned() != null ? paste.getIsPinned() : false,
+                paste.getFolder() != null ? paste.getFolder() : "General",
                 paste.getCreatedAt(),
                 paste.getUpdatedAt()
         );

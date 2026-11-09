@@ -1,9 +1,10 @@
 // DevVault — Markdown Parsing, Syntax Highlighting & Visuals Module
 
-import MarkdownIt from 'https://esm.sh/markdown-it';
+// Initialize Markdown-it: Prefer instant UMD window.markdownit, fallback to ESM
+const MarkdownItConstructor = window.markdownit || (await import('https://esm.sh/markdown-it')).default;
 
 // Initialize Markdown-it
-const md = new MarkdownIt({
+const md = new MarkdownItConstructor({
     html: true,
     breaks: true,
     linkify: true,
@@ -18,18 +19,18 @@ const md = new MarkdownIt({
     }
 });
 
-// Setup Mermaid defaults
-if (window.mermaid) {
-    window.mermaid.initialize({
-        startOnLoad: false,
-        theme: 'dark',
-        securityLevel: 'loose'
-    });
-}
-
 // Global copy helper for code blocks
 export function copyToClipboard(btnElement, text) {
     if (!btnElement || typeof text !== 'string') return;
+    if (!btnElement.dataset.defaultHtml) {
+        btnElement.dataset.defaultHtml = btnElement.innerHTML;
+    }
+    const defaultHtml = btnElement.dataset.defaultHtml;
+    if (btnElement._resetTimer) {
+        clearTimeout(btnElement._resetTimer);
+        btnElement._resetTimer = null;
+    }
+
     const textToCopy = decodeURIComponent(text);
     const copyAction = (navigator.clipboard && navigator.clipboard.writeText)
         ? navigator.clipboard.writeText(textToCopy)
@@ -49,12 +50,13 @@ export function copyToClipboard(btnElement, text) {
           });
 
     copyAction.then(() => {
-        const originalHtml = btnElement.innerHTML;
         btnElement.innerHTML = '<i class="fa-solid fa-check text-green-400"></i> Copied!';
         btnElement.classList.add('text-green-400', 'border-green-400');
-        setTimeout(() => {
-            btnElement.innerHTML = originalHtml;
+        btnElement._resetTimer = setTimeout(() => {
+            btnElement.innerHTML = defaultHtml;
             btnElement.classList.remove('text-green-400', 'border-green-400');
+            delete btnElement.dataset.defaultHtml;
+            btnElement._resetTimer = null;
         }, 2000);
     }).catch(err => {
         console.error('Failed to copy text: ', err);
@@ -257,6 +259,37 @@ ${md.render(p1)}
 </div>`;
     });
 
+    // 5. Parse Obsidian & Notion Callouts (> [!TYPE] Title)
+    const calloutRegex = /(?:^|\n)>[ \t]*\[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION|INFO)\]([^\n]*)\n((?:>[ \t]*[^\n]*(?:\n|$))*)/gi;
+    cleaned = cleaned.replace(calloutRegex, (match, type, title, body) => {
+        const cleanType = (type || 'NOTE').toUpperCase();
+        const cleanTitle = (title || '').trim() || cleanType;
+        const cleanBody = (body || '').replace(/^>[ \t]?/gm, '').trim();
+
+        let icon = '<i class="fa-solid fa-circle-info"></i>';
+        if (cleanType === 'TIP') icon = '<i class="fa-solid fa-lightbulb"></i>';
+        else if (cleanType === 'WARNING') icon = '<i class="fa-solid fa-triangle-exclamation"></i>';
+        else if (cleanType === 'IMPORTANT' || cleanType === 'CAUTION') icon = '<i class="fa-solid fa-circle-exclamation"></i>';
+
+        return `\n<div class="callout-card callout-${cleanType.toLowerCase()}">
+<div class="callout-header">
+<span class="callout-icon">${icon}</span>
+<span class="callout-title">${cleanTitle}</span>
+</div>
+<div class="callout-body">
+${md.render(cleanBody)}
+</div>
+</div>\n`;
+    });
+
+    // 6. Parse Task Checkboxes (- [ ] and - [x]) with unique index
+    let taskIdx = 0;
+    cleaned = cleaned.replace(/^[ \t]*-\s*\[([ xX])\]\s*(.*)$/gm, (match, check, itemContent) => {
+        const isChecked = check.toLowerCase() === 'x';
+        const currentTask = taskIdx++;
+        return `- <input type="checkbox" class="task-checkbox mr-2 accent-indigo-500 rounded align-middle cursor-pointer" data-task-index="${currentTask}" ${isChecked ? 'checked' : ''}> ${itemContent}`;
+    });
+
     return cleaned;
 }
 
@@ -306,7 +339,7 @@ md.renderer.rules.fence = function (tokens, idx, options, env, slf) {
         highlightedCode = md.utils.escapeHtml(code);
     }
     const encodedStandardCode = encodeURIComponent(code);
-    const rawHtml = `<pre class="hljs m-0 p-4 text-sm" style="margin: 0 !important; background: transparent !important;"><code class="language-${info}">${highlightedCode}</code></pre>`;
+    const rawHtml = `<pre class="hljs code-block-pre custom-scrollbar"><code class="language-${info}">${highlightedCode}</code></pre>`;
 
     // Preview View
     if (info === 'mermaid') {
@@ -317,7 +350,11 @@ md.renderer.rules.fence = function (tokens, idx, options, env, slf) {
     } else if (info === 'markdown' || info === 'md') {
         hasPreview = true;
         defaultMode = 'raw';
-        previewHtml = `<div class="p-6 markdown-body bg-[#1e293b] border-t border-slate-700/50">${md.render(code)}</div>`;
+        previewHtml = `<div class="p-6 markdown-body bg-[var(--surface-canvas)] border-t border-[var(--border-subtle)]">${md.render(code)}</div>`;
+    } else if (info === 'html' || info === 'htm' || info === 'svg') {
+        hasPreview = true;
+        defaultMode = 'raw';
+        previewHtml = `<div class="p-6 bg-[var(--surface-canvas)] border-t border-[var(--border-subtle)] overflow-x-auto custom-scrollbar">${code}</div>`;
     }
 
     // Toggle UI
@@ -325,25 +362,25 @@ md.renderer.rules.fence = function (tokens, idx, options, env, slf) {
     if (hasPreview) {
         const isRaw = defaultMode === 'raw';
         toggleHtml = `
-        <div class="flex bg-slate-900 rounded border border-slate-700 overflow-hidden opacity-0 group-hover:opacity-100 transition-all duration-200">
-            <button class="toggle-view-btn prev-btn px-3 py-1 text-[11px] font-bold uppercase transition-colors ${isRaw ? 'text-slate-400 hover:text-slate-200 hover:bg-slate-800' : 'bg-slate-700 text-white'}" data-raw-id="${rawId}" data-prev-id="${prevId}" data-mode="preview">Preview</button>
-            <button class="toggle-view-btn raw-btn px-3 py-1 text-[11px] font-bold uppercase transition-colors ${!isRaw ? 'text-slate-400 hover:text-slate-200 hover:bg-slate-800' : 'bg-slate-700 text-white'}" data-raw-id="${rawId}" data-prev-id="${prevId}" data-mode="raw">Raw</button>
+        <div class="flex bg-card rounded border border-border-subtle overflow-hidden opacity-0 group-hover:opacity-100 transition-all duration-200">
+            <button class="toggle-view-btn prev-btn px-3 py-1 text-[11px] font-bold uppercase transition-colors ${isRaw ? 'text-content-muted hover:text-content-primary hover:bg-white/5' : 'bg-indigo-600 text-white'}" data-raw-id="${rawId}" data-prev-id="${prevId}" data-mode="preview">Preview</button>
+            <button class="toggle-view-btn raw-btn px-3 py-1 text-[11px] font-bold uppercase transition-colors ${!isRaw ? 'text-content-muted hover:text-content-primary hover:bg-white/5' : 'bg-indigo-600 text-white'}" data-raw-id="${rawId}" data-prev-id="${prevId}" data-mode="raw">Raw</button>
         </div>
         `;
     }
 
     return `
-    <div class="relative group my-5 rounded-xl overflow-hidden border border-slate-700 shadow-2xl">
-        <div class="bg-gradient-to-r from-slate-800 to-slate-900 text-xs text-slate-300 px-4 py-2.5 flex justify-between items-center border-b border-slate-700">
-            <span class="font-bold tracking-widest uppercase flex items-center text-accent"><i class="fa-solid fa-code mr-2"></i> ${info || 'CODE'}</span>
+    <div class="code-block-card relative group my-6 rounded-xl overflow-hidden border border-[var(--code-block-border)] shadow-md transition-shadow">
+        <div class="bg-[var(--surface-panel)] text-xs text-content-secondary px-4 py-2 flex justify-between items-center border-b border-[var(--code-block-border)] select-none">
+            <span class="font-medium tracking-wider uppercase flex items-center text-content-secondary text-[11px]"><i class="fa-solid fa-code mr-2 text-accent-light text-[10px]"></i> ${info || 'CODE'}</span>
             <div class="flex items-center gap-3">
                 ${toggleHtml}
-                <button class="copy-code-btn hover:text-white transition-all duration-200 bg-slate-700/50 hover:bg-slate-700 px-2 py-1 rounded border border-slate-600 opacity-0 group-hover:opacity-100 flex items-center gap-1" title="Copy Code" data-code="${encodedStandardCode}">
+                <button class="copy-code-btn hover:text-content-primary transition-all duration-200 bg-card hover:bg-white/5 px-2 py-1 rounded border border-border-subtle opacity-0 group-hover:opacity-100 flex items-center gap-1 text-content-secondary" title="Copy Code" data-code="${encodedStandardCode}">
                     <i class="fa-solid fa-copy text-[10px]"></i> Copy
                 </button>
             </div>
         </div>
-        <div class="bg-[#0b1120] w-full overflow-x-auto">
+        <div class="bg-[var(--code-block-bg)] w-full overflow-x-auto custom-scrollbar">
             <div id="${rawId}" class="${defaultMode === 'raw' ? '' : 'hidden'}">
                 ${rawHtml}
             </div>
@@ -361,15 +398,16 @@ export async function renderPreview(rawContent, previewContainer) {
 
     if (window.DOMPurify) {
         previewContainer.innerHTML = window.DOMPurify.sanitize(rawHtml, {
-            ADD_TAGS: ['use'],
-            ADD_ATTR: ['target', 'data-raw-id', 'data-prev-id', 'data-mode', 'data-code']
+            ADD_TAGS: ['use', 'input'],
+            ADD_ATTR: ['target', 'data-raw-id', 'data-prev-id', 'data-mode', 'data-code', 'data-task-index', 'checked', 'type', 'class']
         });
     } else {
         previewContainer.innerHTML = rawHtml;
     }
 
-    // Render KaTeX Math
-    if (window.renderMathInElement) {
+    // Render KaTeX Math (only if math tokens exist in text)
+    const hasMath = Boolean(rawContent && (rawContent.includes('$') || rawContent.includes('\\(') || rawContent.includes('\\[')));
+    if (window.renderMathInElement && hasMath) {
         try {
             window.renderMathInElement(previewContainer, {
                 delimiters: [
@@ -381,13 +419,23 @@ export async function renderPreview(rawContent, previewContainer) {
                 throwOnError: false
             });
         } catch (e) {
-            console.error("Math rendering error", e);
+            console.warn("Math rendering error", e);
         }
     }
 
-    // Render Mermaid Diagrams
-    if (window.mermaid) {
+    // Render Mermaid Diagrams on-demand (only if .mermaid blocks exist in DOM)
+    if (previewContainer.querySelector('.mermaid')) {
         try {
+            if (!window.mermaid) {
+                const mermaidModule = await import('https://cdnjs.cloudflare.com/ajax/libs/mermaid/10.9.0/mermaid.esm.min.mjs');
+                window.mermaid = mermaidModule.default || mermaidModule;
+                const isDark = document.documentElement.classList.contains('dark');
+                window.mermaid.initialize({
+                    startOnLoad: false,
+                    theme: isDark ? 'dark' : 'default',
+                    securityLevel: 'loose'
+                });
+            }
             await window.mermaid.run({
                 querySelector: '.mermaid'
             });
@@ -397,11 +445,11 @@ export async function renderPreview(rawContent, previewContainer) {
             renderedMermaids.forEach(svg => {
                 svg.classList.add('cursor-zoom-in', 'hover:opacity-90', 'transition-opacity');
                 svg.addEventListener('click', () => {
-                    import('./modals.js').then(m => m.openDiagramModal(svg));
+                    import('./modals.js?v=3.5').then(m => m.openDiagramModal(svg));
                 });
             });
         } catch (e) {
-            console.error("Mermaid error:", e);
+            console.warn("Mermaid error:", e);
         }
     }
 }

@@ -34,10 +34,12 @@ export function showDialog(message, type = 'alert', title = 'Notice') {
         }, 10);
 
         const closeDialog = (result) => {
+            overlay.style.pointerEvents = 'none';
             overlay.classList.add('opacity-0');
             box.classList.add('scale-95');
             setTimeout(() => {
                 overlay.classList.add('hidden');
+                overlay.style.pointerEvents = '';
                 resolve(result);
             }, 300);
         };

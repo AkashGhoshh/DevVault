@@ -40,7 +40,11 @@ The application is now clean, lightweight, and blazing fast:
 * **Schema Management:** Clean Hibernate DDL (`ddl-auto=update`) directly derived from `Paste.java`
 * **Tests:** 14 unit & integration tests passing (`BUILD SUCCESS`)
 
-### Frontend
-* **`storage.js`:** 44 lines of pure, instant `localStorage` persistence.
-* **`index.html`:** Clean markup with zero external OAuth/Prettier CDN dependencies.
-* **`app.js`:** Clean CodeMirror 6 editor with markdown rendering, syntax highlighting, and cloud sync.
+### Frontend (Modular ES Architecture)
+* **`storage.js`:** Pure, instant `localStorage` persistence (44 lines).
+* **`editor.js`:** CodeMirror 6 setup, theme, and content accessors (57 lines).
+* **`markdown.js`:** Markdown-it parser, syntax highlighting, KaTeX math, and Mermaid diagrams (407 lines).
+* **`sidebar.js`:** Note tree hierarchy, real-time search filter, and sidebar toggle (221 lines).
+* **`modals.js`:** Custom styled dialogs and Mermaid diagram zoom/pan modal (134 lines).
+* **`app.js`:** Main controller, REST sync, keyboard shortcuts (`Ctrl+S`, `Alt+N`), and split-screen resizer (432 lines).
+* **`index.html`:** Clean semantic HTML with zero build tools or bundler requirements.

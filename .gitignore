@@ -8,4 +8,8 @@ target/
 .agents
 skills-lock.json
 
+AGENTS.md
+FEATURES.md
+FEATURE_AUDIT.md
+
 # .agents (Uncomment if you do not want to track skills in git, but keep commented to see in IDE explorer)

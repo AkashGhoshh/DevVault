@@ -15,6 +15,10 @@ public class Paste {
     @Column(columnDefinition = "TEXT")
     private String content;
 
+    private String tags = "";
+    private Boolean isPinned = false;
+    private String folder = "General";
+
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
 
@@ -40,6 +44,30 @@ public class Paste {
 
     public void setContent(String content) {
         this.content = content;
+    }
+
+    public String getTags() {
+        return tags;
+    }
+
+    public void setTags(String tags) {
+        this.tags = tags;
+    }
+
+    public Boolean getIsPinned() {
+        return isPinned;
+    }
+
+    public void setIsPinned(Boolean isPinned) {
+        this.isPinned = isPinned;
+    }
+
+    public String getFolder() {
+        return folder;
+    }
+
+    public void setFolder(String folder) {
+        this.folder = folder;
     }
 
     public LocalDateTime getCreatedAt() {
